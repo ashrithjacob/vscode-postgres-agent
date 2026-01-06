@@ -3,14 +3,20 @@ import { SecretStorageService } from './services/secretStorage';
 import { DatabaseService } from './services/database';
 import { LlmService } from './services/llm';
 import { SchemaService } from './services/schema';
+import { ConnectionStorageService } from './services/connectionStorage';
 import { QueryPanel } from './panels/QueryPanel';
-import { DbCredentials, LlmConfig } from './types';
+import { ResultsPanel } from './panels/ResultsPanel';
+import { ConnectionsProvider, ConnectionItem } from './views/ConnectionsProvider';
+import { DbCredentials, LlmConfig, QueryResult, ChatMessage } from './types';
 
 let secretStorageService: SecretStorageService;
 let databaseService: DatabaseService;
 let llmService: LlmService;
 let schemaService: SchemaService;
+let connectionStorageService: ConnectionStorageService;
+let connectionsProvider: ConnectionsProvider;
 let statusBarItem: vscode.StatusBarItem;
+let activeConnectionId: string | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
   // Initialize services
@@ -18,6 +24,15 @@ export async function activate(context: vscode.ExtensionContext) {
   databaseService = new DatabaseService();
   llmService = new LlmService();
   schemaService = new SchemaService(databaseService);
+  connectionStorageService = new ConnectionStorageService(context.globalState, context.secrets);
+
+  // Initialize connections tree view
+  connectionsProvider = new ConnectionsProvider(connectionStorageService);
+  const treeView = vscode.window.createTreeView('postgresConnections', {
+    treeDataProvider: connectionsProvider,
+    showCollapseAll: false,
+  });
+  context.subscriptions.push(treeView);
 
   // Create status bar item
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -37,7 +52,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('postgres-agent.configure', configureLlm),
     vscode.commands.registerCommand('postgres-agent.connect', connectToDatabase),
     vscode.commands.registerCommand('postgres-agent.query', openQueryPanel),
-    vscode.commands.registerCommand('postgres-agent.disconnect', disconnectFromDatabase)
+    vscode.commands.registerCommand('postgres-agent.disconnect', disconnectFromDatabase),
+    vscode.commands.registerCommand('postgres-agent.saveConnection', saveCurrentConnection),
+    vscode.commands.registerCommand('postgres-agent.connectSaved', connectToSavedConnection),
+    vscode.commands.registerCommand('postgres-agent.deleteConnection', deleteConnection),
+    vscode.commands.registerCommand('postgres-agent.renameConnection', renameConnection),
+    vscode.commands.registerCommand('postgres-agent.clearHistory', clearConnectionHistory),
+    vscode.commands.registerCommand('postgres-agent.refreshConnections', () => connectionsProvider.refresh())
   );
 
   // Store extension URI for webview
@@ -200,16 +221,168 @@ export async function activate(context: vscode.ExtensionContext) {
       );
 
       updateStatusBar();
-      vscode.window.showInformationMessage(
-        `Connected to ${database}@${host}. Schema introspected: ${schemaService.getSchema()?.tables.length || 0} tables found.`
+      activeConnectionId = null;
+      connectionsProvider.setActiveConnection(null);
+
+      const tableCount = schemaService.getSchema()?.tables.length || 0;
+      const saveAction = await vscode.window.showInformationMessage(
+        `Connected to ${database}@${host}. ${tableCount} tables found.`,
+        'Save Connection',
+        'Dismiss'
       );
+
+      if (saveAction === 'Save Connection') {
+        await saveCurrentConnection(credentials);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       vscode.window.showErrorMessage(`Failed to connect: ${message}`);
     }
   }
 
+  async function saveCurrentConnection(credentials?: DbCredentials) {
+    const creds = credentials || await secretStorageService.getDbCredentials();
+    if (!creds) {
+      vscode.window.showErrorMessage('No active connection to save.');
+      return;
+    }
+
+    const defaultName = `${creds.database}@${creds.host}`;
+    const name = await vscode.window.showInputBox({
+      prompt: 'Enter a name for this connection',
+      placeHolder: defaultName,
+      value: defaultName,
+      ignoreFocusOut: true,
+      validateInput: async (value) => {
+        if (!value.trim()) {
+          return 'Connection name cannot be empty';
+        }
+        if (await connectionStorageService.connectionExists(value.trim())) {
+          return 'A connection with this name already exists';
+        }
+        return null;
+      }
+    });
+
+    if (!name) {
+      return;
+    }
+
+    const savedConnection = await connectionStorageService.saveConnection(name.trim(), creds);
+    activeConnectionId = savedConnection.id;
+    connectionsProvider.setActiveConnection(savedConnection.id);
+    vscode.window.showInformationMessage(`Connection "${name}" saved.`);
+  }
+
+  async function connectToSavedConnection(item: ConnectionItem) {
+    const connection = item.connection;
+    const credentials = await connectionStorageService.getCredentials(connection.id);
+
+    if (!credentials) {
+      vscode.window.showErrorMessage('Could not retrieve connection credentials.');
+      return;
+    }
+
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Connecting to ${connection.name}...`,
+        },
+        async () => {
+          if (databaseService.isConnected()) {
+            await databaseService.disconnect();
+          }
+          await databaseService.connect(credentials);
+          await schemaService.refresh();
+          await connectionStorageService.updateLastUsed(connection.id);
+        }
+      );
+
+      activeConnectionId = connection.id;
+      connectionsProvider.setActiveConnection(connection.id);
+      updateStatusBar();
+
+      // Load chat history and open query panel
+      const history = connectionStorageService.getChatHistory(connection.id);
+      openQueryPanelWithHistory(history.messages);
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      vscode.window.showErrorMessage(`Failed to connect: ${message}`);
+    }
+  }
+
+  async function deleteConnection(item: ConnectionItem) {
+    const connection = item.connection;
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete connection "${connection.name}"? This will also delete the chat history.`,
+      { modal: true },
+      'Delete'
+    );
+
+    if (confirm !== 'Delete') {
+      return;
+    }
+
+    await connectionStorageService.deleteConnection(connection.id);
+
+    if (activeConnectionId === connection.id) {
+      activeConnectionId = null;
+      connectionsProvider.setActiveConnection(null);
+    }
+
+    connectionsProvider.refresh();
+    vscode.window.showInformationMessage(`Connection "${connection.name}" deleted.`);
+  }
+
+  async function renameConnection(item: ConnectionItem) {
+    const connection = item.connection;
+    const newName = await vscode.window.showInputBox({
+      prompt: 'Enter new name for the connection',
+      value: connection.name,
+      ignoreFocusOut: true,
+      validateInput: async (value) => {
+        if (!value.trim()) {
+          return 'Connection name cannot be empty';
+        }
+        if (value.trim() !== connection.name && await connectionStorageService.connectionExists(value.trim())) {
+          return 'A connection with this name already exists';
+        }
+        return null;
+      }
+    });
+
+    if (!newName || newName === connection.name) {
+      return;
+    }
+
+    await connectionStorageService.renameConnection(connection.id, newName.trim());
+    connectionsProvider.refresh();
+    vscode.window.showInformationMessage(`Connection renamed to "${newName}".`);
+  }
+
+  async function clearConnectionHistory(item: ConnectionItem) {
+    const connection = item.connection;
+    const confirm = await vscode.window.showWarningMessage(
+      `Clear chat history for "${connection.name}"?`,
+      { modal: true },
+      'Clear'
+    );
+
+    if (confirm !== 'Clear') {
+      return;
+    }
+
+    await connectionStorageService.clearChatHistory(connection.id);
+    vscode.window.showInformationMessage(`Chat history for "${connection.name}" cleared.`);
+  }
+
   async function openQueryPanel() {
+    await openQueryPanelWithHistory([]);
+  }
+
+  async function openQueryPanelWithHistory(history: ChatMessage[]) {
     if (!databaseService.isConnected()) {
       const action = await vscode.window.showWarningMessage(
         'Not connected to a database. Would you like to connect now?',
@@ -242,12 +415,119 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }
 
-    const panel = QueryPanel.createOrShow(extensionUri, async (query: string) => {
-      const schemaContext = schemaService.getSchemaContext();
-      const sql = await llmService.generateSql(schemaContext, query);
-      const result = await databaseService.executeQuery(sql);
-      return { sql, result };
-    });
+    // Helper to save messages to history
+    const saveMessage = async (type: ChatMessage['type'], content: string, sql?: string, rowCount?: number) => {
+      if (activeConnectionId) {
+        await connectionStorageService.saveChatMessage(activeConnectionId, {
+          type,
+          content,
+          sql,
+          rowCount,
+        });
+      }
+    };
+
+    const panel = QueryPanel.createOrShow(
+      extensionUri,
+      // Main query handler
+      async (query: string) => {
+        // Save user query
+        await saveMessage('user', query);
+
+        const schemaContext = schemaService.getSchemaContext();
+        const sql = await llmService.generateSql(schemaContext, query);
+
+        // Verify the generated SQL
+        const verification = await llmService.verifySql(schemaContext, query, sql);
+
+        // If clarification is needed, return early with the clarification request
+        if (verification.needsClarification && verification.clarificationQuestion) {
+          await saveMessage('assistant', verification.clarificationQuestion);
+          return {
+            sql,
+            verification,
+            needsClarification: true,
+            clarificationQuestion: verification.clarificationQuestion
+          };
+        }
+
+        // Use corrected SQL if provided, otherwise use original
+        const finalSql = verification.correctedSql || sql;
+
+        // Save SQL
+        await saveMessage('sql', finalSql);
+
+        const result = await databaseService.executeQuery(finalSql);
+
+        // Save result summary
+        await saveMessage('result', `Query returned ${result.rowCount} rows`, finalSql, result.rowCount);
+
+        return { sql: finalSql, result, verification };
+      },
+      // Clarification handler
+      async (originalQuestion: string, clarificationAnswer: string) => {
+        // Save clarification response
+        await saveMessage('user', clarificationAnswer);
+
+        const schemaContext = schemaService.getSchemaContext();
+        const sql = await llmService.regenerateSqlWithClarification(
+          schemaContext,
+          originalQuestion,
+          clarificationAnswer
+        );
+
+        // Verify the regenerated SQL (should be valid now with clarification)
+        const verification = await llmService.verifySql(schemaContext, originalQuestion, sql);
+        const finalSql = verification.correctedSql || sql;
+
+        // Save SQL
+        await saveMessage('sql', finalSql);
+
+        const result = await databaseService.executeQuery(finalSql);
+
+        // Save result summary
+        await saveMessage('result', `Query returned ${result.rowCount} rows`, finalSql, result.rowCount);
+
+        return { sql: finalSql, result, verification };
+      },
+      // Validate SQL handler
+      async (sql: string) => {
+        return await databaseService.validateSql(sql);
+      },
+      // Run edited SQL handler
+      async (sql: string) => {
+        // Save edited SQL
+        await saveMessage('sql', sql);
+
+        const result = await databaseService.executeQuery(sql);
+
+        // Save result summary
+        await saveMessage('result', `Query returned ${result.rowCount} rows`, sql, result.rowCount);
+
+        return { sql, result };
+      },
+      // Fix query handler
+      async (sql: string, error: string, originalQuestion: string) => {
+        const schemaContext = schemaService.getSchemaContext();
+        const fixedSql = await llmService.fixSql(schemaContext, sql, error, originalQuestion);
+
+        // Save fixed SQL
+        await saveMessage('sql', fixedSql);
+
+        const result = await databaseService.executeQuery(fixedSql);
+
+        // Save result summary
+        await saveMessage('result', `Query returned ${result.rowCount} rows`, fixedSql, result.rowCount);
+
+        return { sql: fixedSql, result };
+      },
+      // Show results handler
+      (sql: string, result: QueryResult) => {
+        ResultsPanel.show(sql, result);
+      },
+      // Initial history
+      history
+    );
 
     panel.updateConnectionStatus(true, databaseService.getConnectionInfo());
   }
@@ -260,6 +540,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     await databaseService.disconnect();
     schemaService.clear();
+    activeConnectionId = null;
+    connectionsProvider.setActiveConnection(null);
     updateStatusBar();
     vscode.window.showInformationMessage('Disconnected from database.');
   }

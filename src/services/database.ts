@@ -1,4 +1,4 @@
-import { Pool, PoolClient, QueryResult as PgQueryResult } from 'pg';
+import { Pool, QueryResult as PgQueryResult } from 'pg';
 import { DbCredentials, ColumnInfo, QueryResult } from '../types';
 
 export class DatabaseService {
@@ -134,6 +134,37 @@ export class DatabaseService {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  async validateSql(sql: string): Promise<{ isValid: boolean; error?: string }> {
+    if (!this.pool) {
+      return { isValid: false, error: 'Not connected to database' };
+    }
+
+    // First check for forbidden keywords
+    const normalizedSql = sql.trim().toUpperCase();
+    const forbiddenKeywords = [
+      'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE', 'ALTER',
+      'TRUNCATE', 'GRANT', 'REVOKE', 'COPY', 'EXECUTE'
+    ];
+
+    for (const keyword of forbiddenKeywords) {
+      if (normalizedSql.startsWith(keyword) || normalizedSql.includes(` ${keyword} `)) {
+        return {
+          isValid: false,
+          error: `Forbidden operation: ${keyword} queries are not allowed. Only SELECT queries are permitted.`
+        };
+      }
+    }
+
+    // Use EXPLAIN to validate the SQL without executing it
+    try {
+      await this.pool.query(`EXPLAIN ${sql}`);
+      return { isValid: true };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      return { isValid: false, error: errorMessage };
     }
   }
 }

@@ -2,6 +2,7 @@
 'use strict';
 
 const path = require('path');
+const webpack = require('webpack');
 
 /** @type {import('webpack').Configuration} */
 const extensionConfig = {
@@ -14,8 +15,14 @@ const extensionConfig = {
     libraryTarget: 'commonjs2'
   },
   externals: {
-    vscode: 'commonjs vscode'
+    vscode: 'commonjs vscode',
+    'pg-native': 'commonjs pg-native'
   },
+  plugins: [
+    new webpack.IgnorePlugin({
+      resourceRegExp: /^pg-native$/
+    })
+  ],
   resolve: {
     extensions: ['.ts', '.js']
   },
