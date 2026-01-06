@@ -60,9 +60,10 @@ npm run build:vsix
 
 # Install in VS Code
 code --install-extension vscode-postgres-agent-0.1.0.vsix
+# For Cursor users:
+cursor --install-extension vscode-postgres-agent-0.1.0.vsix
 ```
 
-Alternatively, in VS Code: **Extensions** → **···** → **Install from VSIX...**
 
 </details>
 

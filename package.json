@@ -4,6 +4,11 @@
   "description": "Query PostgreSQL databases using natural language powered by AI",
   "version": "0.1.0",
   "publisher": "postgres-agent",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ash/vscode-postgres-agent"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
