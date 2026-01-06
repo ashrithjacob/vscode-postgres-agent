@@ -1,0 +1,56 @@
+{
+  "name": "vscode-postgres-agent",
+  "displayName": "PostgreSQL Agent",
+  "description": "Query PostgreSQL databases using natural language powered by AI",
+  "version": "0.1.0",
+  "publisher": "postgres-agent",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "postgres-agent.configure",
+        "title": "Postgres Agent: Configure LLM"
+      },
+      {
+        "command": "postgres-agent.connect",
+        "title": "Postgres Agent: Connect to Database"
+      },
+      {
+        "command": "postgres-agent.query",
+        "title": "Postgres Agent: Open Query Panel"
+      },
+      {
+        "command": "postgres-agent.disconnect",
+        "title": "Postgres Agent: Disconnect"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "lint": "eslint src --ext ts",
+    "build:vsix": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/pg": "^8.10.9",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}
