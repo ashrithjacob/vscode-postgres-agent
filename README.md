@@ -1,89 +1,129 @@
+<div align="center">
+
 # PostgreSQL Agent for VS Code
 
-Query your PostgreSQL databases using natural language, powered by AI. Ask questions in plain English and get results directly in VS Code.
+**Query your PostgreSQL databases using natural language, powered by AI.**
 
-## Features
+[![VS Code](https://img.shields.io/badge/VS%20Code-v1.85+-007ACC?logo=visual-studio-code&logoColor=white)](https://code.visualstudio.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-- **Natural Language Queries**: Ask questions like "Show me all users who signed up last week" and get SQL + results
-- **Automatic Schema Introspection**: The extension automatically learns your database structure
-- **Flexible LLM Support**: Works with any OpenAI-compatible API (OpenAI, LiteLLM, Ollama, OpenRouter, etc.)
-- **Secure Credential Storage**: All credentials are stored in VS Code's encrypted secret storage
-- **Read-Only Safety**: Only SELECT queries are allowed - your data is safe from accidental modifications
-- **Interactive Results**: Sortable, paginated table view for query results
+Ask questions in plain English and get results directly in VS Code.
 
-## Installation
+[Getting Started](#-getting-started) · [Features](#-features) · [Usage](#-usage) · [Troubleshooting](#-troubleshooting)
 
-### From Source (Development)
+</div>
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-repo/vscode-postgres-agent.git
-   cd vscode-postgres-agent
-   ```
+---
 
-2. Install dependencies and build:
-   ```bash
-   npm install
-   npm run compile
-   ```
+## ✨ Features
 
-3. Package the extension:
-   ```bash
-   npm run build:vsix
-   ```
+| Feature | Description |
+|---------|-------------|
+| **Natural Language Queries** | Ask questions like "Show me all users who signed up last week" and get SQL + results |
+| **Schema Introspection** | Automatically learns your database structure |
+| **Flexible LLM Support** | Works with OpenAI, LiteLLM, Ollama, OpenRouter, or any OpenAI-compatible API |
+| **Secure Storage** | Credentials stored in VS Code's encrypted SecretStorage |
+| **Read-Only Safety** | Only SELECT queries allowed — your data is safe from accidental modifications |
+| **Interactive Results** | Sortable, paginated table view for query results |
 
-4. Install in VS Code:
-   ```bash
-   code --install-extension vscode-postgres-agent-0.1.0.vsix
-   ```
+---
 
-   Or in VS Code: `Extensions` → `...` → `Install from VSIX...`
+## 🚀 Getting Started
 
-## Usage
+### Prerequisites
 
-### 1. Configure LLM
+- [VS Code](https://code.visualstudio.com/) v1.85 or higher
+- [Node.js](https://nodejs.org/) v18+ (for building from source)
+- Access to a PostgreSQL database
+- An OpenAI-compatible LLM API endpoint
 
-Run the command: **Postgres Agent: Configure LLM** (`Ctrl+Shift+P` → type "Postgres Agent")
+### Installation
 
-Enter:
-- **Base URL**: Your OpenAI-compatible API endpoint
-  - OpenAI: `https://api.openai.com`
-  - LiteLLM: `http://localhost:4000`
-  - Ollama: `http://localhost:11434`
-  - OpenRouter: `https://openrouter.ai/api`
-- **API Key**: Your API key (or any string for local models)
-- **Model**: The model name (e.g., `gpt-4`, `claude-3-opus`, `llama2`)
+<details>
+<summary><strong>From Source (Development)</strong></summary>
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/vscode-postgres-agent.git
+cd vscode-postgres-agent
+
+# Install dependencies
+npm install
+
+# Build the extension
+npm run compile
+
+# Package as VSIX
+npm run build:vsix
+
+# Install in VS Code
+code --install-extension vscode-postgres-agent-0.1.0.vsix
+```
+
+Alternatively, in VS Code: **Extensions** → **···** → **Install from VSIX...**
+
+</details>
+
+---
+
+## 📖 Usage
+
+### 1. Configure Your LLM
+
+Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) → **Postgres Agent: Configure LLM**
+
+| Provider | Base URL | Notes |
+|----------|----------|-------|
+| [OpenAI](https://openai.com/) | `https://api.openai.com` | Requires API key |
+| [OpenRouter](https://openrouter.ai/) | `https://openrouter.ai/api` | Multi-model access |
+| [Ollama](https://ollama.ai/) | `http://localhost:11434` | Local models, no key needed |
+| [LiteLLM](https://litellm.ai/) | `http://localhost:4000` | Proxy for multiple providers |
 
 ### 2. Connect to Database
 
-Run the command: **Postgres Agent: Connect to Database**
+Open Command Palette → **Postgres Agent: Connect to Database**
 
-Enter your PostgreSQL connection details:
-- Host (default: `localhost`)
-- Port (default: `5432`)
-- Username
-- Password
-- Database name
-- SSL (Yes/No)
+Enter your connection details:
+- **Host** — default: `localhost`
+- **Port** — default: `5432`
+- **Username** / **Password**
+- **Database name**
+- **SSL** — Yes/No
 
-The extension will automatically introspect your database schema.
+The extension automatically introspects your schema upon connection.
 
-### 3. Start Querying
+### 3. Query with Natural Language
 
-Run the command: **Postgres Agent: Open Query Panel**
+Open Command Palette → **Postgres Agent: Open Query Panel**
 
-Type your question in plain English and press **Run Query** (or `Ctrl+Enter`):
+Type your question and press **Run Query** or `Ctrl+Enter`:
 
 ```
 Show me all orders from the last 7 days with customer names
 ```
 
-The extension will:
-1. Generate the SQL query using your configured LLM
-2. Execute it against your database
-3. Display results in an interactive table
+The extension generates SQL, executes it safely, and displays results in an interactive table.
 
-## Commands
+---
+
+## 🎯 Example Queries
+
+```sql
+-- These are example natural language prompts, not SQL!
+
+"Show me all users who registered this month"
+"What are the top 10 products by total sales?"
+"List all orders with their items and customer emails"
+"Count how many records are in each table"
+"Find all users whose email contains 'gmail'"
+"Show me the average order value by month"
+```
+
+---
+
+## ⌨️ Commands
 
 | Command | Description |
 |---------|-------------|
@@ -92,53 +132,64 @@ The extension will:
 | `Postgres Agent: Open Query Panel` | Open the natural language query interface |
 | `Postgres Agent: Disconnect` | Disconnect from the current database |
 
-## Example Queries
+---
 
-- "Show me all users who registered this month"
-- "What are the top 10 products by total sales?"
-- "List all orders with their items and customer emails"
-- "Count how many records are in each table"
-- "Find all users whose email contains 'gmail'"
-- "Show me the average order value by month"
+## 🔒 Security
 
-## Security
+- **Encrypted Storage** — All credentials stored in VS Code's SecretStorage
+- **Read-Only Mode** — Only `SELECT` queries are executed; `INSERT`, `UPDATE`, `DELETE`, `DROP` are blocked
+- **Privacy** — Only your schema is sent to the LLM for context, never your actual data
 
-- **Credentials**: Stored in VS Code's encrypted SecretStorage
-- **Read-Only**: Only SELECT queries are allowed; INSERT, UPDATE, DELETE, DROP, etc. are blocked
-- **Schema Context**: Your schema is sent to the LLM for context, but no actual data is shared
+---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
-### "LLM connection test failed"
-- Verify your base URL is correct and includes the protocol (`http://` or `https://`)
-- Check your API key is valid
-- For local models, ensure the server is running
+<details>
+<summary><strong>"LLM connection test failed"</strong></summary>
 
-### "Failed to connect to database"
+- Verify your base URL includes the protocol (`http://` or `https://`)
+- Check that your API key is valid
+- For local models (Ollama), ensure the server is running
+
+</details>
+
+<details>
+<summary><strong>"Failed to connect to database"</strong></summary>
+
 - Verify PostgreSQL is running and accessible
-- Check credentials are correct
+- Double-check credentials (host, port, username, password, database)
 - If using SSL, ensure certificates are properly configured
 
-### "Forbidden operation" error
-- The extension only allows SELECT queries
-- If you need to modify data, use a different tool
+</details>
 
-## Development
+<details>
+<summary><strong>"Forbidden operation" error</strong></summary>
+
+- The extension only allows `SELECT` queries for safety
+- Use a dedicated database client for write operations
+
+</details>
+
+---
+
+## 🛠️ Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Watch mode (auto-rebuild on changes)
-npm run watch
-
-# Build for production
-npm run package
-
-# Create VSIX package
-npm run build:vsix
+npm install          # Install dependencies
+npm run watch        # Watch mode (auto-rebuild)
+npm run package      # Production build
+npm run build:vsix   # Create VSIX package
+npm run lint         # Run ESLint
 ```
 
-## License
+---
 
-MIT
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a [Pull Request](https://github.com/your-username/vscode-postgres-agent/pulls).
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
