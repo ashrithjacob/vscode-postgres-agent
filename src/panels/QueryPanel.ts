@@ -7,6 +7,9 @@ interface QueryResponse {
   verification?: SqlVerificationResult;
   needsClarification?: boolean;
   clarificationQuestion?: string;
+  executionError?: string;
+  validationError?: string;
+  isValidQuery?: boolean;
 }
 
 interface ClarificationResponse {
@@ -22,7 +25,9 @@ interface RunEditedSqlResponse {
 
 interface FixQueryResponse {
   sql: string;
-  result: QueryResult;
+  result?: QueryResult;
+  validationError?: string;
+  isValidQuery?: boolean;
 }
 
 export class QueryPanel {
@@ -42,6 +47,7 @@ export class QueryPanel {
     private readonly onRunEditedSql: (sql: string) => Promise<RunEditedSqlResponse>,
     private readonly onFixQuery: (sql: string, error: string, originalQuestion: string) => Promise<FixQueryResponse>,
     private readonly onShowResults: (sql: string, result: QueryResult) => void,
+    private readonly onTruncateHistory: (fromIndex: number) => Promise<void>,
     history: ChatMessage[] = []
   ) {
     this.panel = panel;
@@ -67,6 +73,11 @@ export class QueryPanel {
         } else if (message.type === 'fixQuery' && typeof message.payload === 'object' && message.payload !== null) {
           const payload = message.payload as { sql: string; error: string };
           await this.handleFixQuery(payload.sql, payload.error);
+        } else if (message.type === 'truncateHistory' && typeof message.payload === 'object' && message.payload !== null) {
+          const payload = message.payload as { fromIndex: number };
+          if (this.onTruncateHistory) {
+            await this.onTruncateHistory(payload.fromIndex);
+          }
         }
       },
       null,
@@ -82,6 +93,7 @@ export class QueryPanel {
     onRunEditedSql: (sql: string) => Promise<RunEditedSqlResponse>,
     onFixQuery: (sql: string, error: string, originalQuestion: string) => Promise<FixQueryResponse>,
     onShowResults: (sql: string, result: QueryResult) => void,
+    onTruncateHistory: (fromIndex: number) => Promise<void>,
     initialHistory: ChatMessage[] = []
   ): QueryPanel {
     const column = vscode.window.activeTextEditor
@@ -106,7 +118,7 @@ export class QueryPanel {
       }
     );
 
-    QueryPanel.currentPanel = new QueryPanel(panel, extensionUri, onQuery, onClarification, onValidateSql, onRunEditedSql, onFixQuery, onShowResults, initialHistory);
+    QueryPanel.currentPanel = new QueryPanel(panel, extensionUri, onQuery, onClarification, onValidateSql, onRunEditedSql, onFixQuery, onShowResults, onTruncateHistory, initialHistory);
     return QueryPanel.currentPanel;
   }
 
@@ -119,7 +131,6 @@ export class QueryPanel {
       // Check if clarification is needed
       if (response.needsClarification && response.clarificationQuestion) {
         this.pendingClarificationQuery = query;
-        this.sendMessage({ type: 'sql', payload: response.sql });
         this.sendMessage({
           type: 'clarification',
           payload: {
@@ -130,14 +141,30 @@ export class QueryPanel {
         return;
       }
 
-      // Send verification info if available
+      // Check if SQL validation failed (syntax error from EXPLAIN)
+      if (response.validationError && !response.isValidQuery) {
+        // Show SQL with validation error and Fix Query option - don't show Run Query button
+        this.sendMessage({ type: 'sqlPendingValidation', payload: response.sql });
+        this.sendMessage({
+          type: 'validationError',
+          payload: {
+            error: response.validationError,
+            sql: response.sql
+          }
+        });
+        return;
+      }
+
+      // SQL is valid - show verification info if available
       if (response.verification) {
         this.sendMessage({ type: 'verification', payload: response.verification });
       }
 
-      this.sendMessage({ type: 'sql', payload: response.sql });
+      // Show the validated SQL with Run Query button
+      this.sendMessage({ type: 'sqlValidated', payload: response.sql });
+
+      // If we already have results (query was auto-executed), show them
       if (response.result) {
-        // Show results in a new tab instead of inline
         this.onShowResults(response.sql, response.result);
         this.sendMessage({ type: 'status', payload: 'Query executed - results shown in new tab' });
       }
@@ -211,11 +238,25 @@ export class QueryPanel {
       const originalQuestion = this.lastUserQuestion || 'Fix this SQL query';
       const response = await this.onFixQuery(sql, error, originalQuestion);
 
-      this.sendMessage({ type: 'sql', payload: response.sql });
-      this.onShowResults(response.sql, response.result);
-      this.sendMessage({ type: 'status', payload: 'Query fixed and executed - results shown in new tab' });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      // Check if the fixed SQL is still invalid
+      if (response.validationError && !response.isValidQuery) {
+        // Show the fixed SQL but still invalid - show Fix Query option again
+        this.sendMessage({ type: 'sqlPendingValidation', payload: response.sql });
+        this.sendMessage({
+          type: 'validationError',
+          payload: {
+            error: response.validationError,
+            sql: response.sql
+          }
+        });
+        return;
+      }
+
+      // SQL is now valid - show with Run Query button
+      this.sendMessage({ type: 'sqlValidated', payload: response.sql });
+      this.sendMessage({ type: 'status', payload: 'Query fixed - click Run SQL to execute' });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       this.sendMessage({ type: 'error', payload: errorMessage });
     }
   }
@@ -249,347 +290,221 @@ export class QueryPanel {
 
     body {
       font-family: var(--vscode-font-family);
-      padding: 20px;
       color: var(--vscode-foreground);
       background-color: var(--vscode-editor-background);
       margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
 
-    h1 {
-      font-size: 1.5em;
-      margin-bottom: 10px;
-      color: var(--vscode-foreground);
-    }
-
-    .status-bar {
-      padding: 8px 12px;
+    .header {
+      padding: 12px 16px;
       background-color: var(--vscode-statusBar-background);
       color: var(--vscode-statusBar-foreground);
-      border-radius: 4px;
-      margin-bottom: 16px;
       font-size: 0.9em;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      flex-shrink: 0;
     }
 
-    .query-section {
-      margin-bottom: 20px;
+    .header h1 {
+      font-size: 1.2em;
+      margin: 0 0 4px 0;
     }
 
-    .query-input {
-      width: 100%;
-      min-height: 80px;
-      padding: 12px;
-      font-size: 14px;
-      border: 1px solid var(--vscode-input-border);
-      background-color: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border-radius: 4px;
-      resize: vertical;
-      font-family: inherit;
-    }
-
-    .query-input:focus {
-      outline: 1px solid var(--vscode-focusBorder);
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .query-input::placeholder {
-      color: var(--vscode-input-placeholderForeground);
-    }
-
-    .button-row {
-      margin-top: 12px;
+    .chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
       display: flex;
-      gap: 10px;
-      align-items: center;
+      flex-direction: column;
+      gap: 12px;
     }
 
-    button {
-      padding: 8px 16px;
+    .chat-message {
+      max-width: 85%;
+      padding: 12px 16px;
+      border-radius: 12px;
       font-size: 14px;
-      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .chat-message.user {
+      align-self: flex-end;
       background-color: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
+      border-bottom-right-radius: 4px;
+    }
+
+    .chat-message.assistant {
+      align-self: flex-start;
+      background-color: var(--vscode-textCodeBlock-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-bottom-left-radius: 4px;
+    }
+
+    .chat-message.sql-message {
+      align-self: flex-start;
+      background-color: transparent;
       border: none;
+      border-bottom-left-radius: 4px;
+      max-width: 98%;
+      width: 98%;
+      padding: 8px 0;
+    }
+
+    .chat-message.result {
+      align-self: flex-start;
+      background-color: var(--vscode-inputValidation-infoBackground);
+      border: 1px solid var(--vscode-inputValidation-infoBorder);
+      border-bottom-left-radius: 4px;
+    }
+
+    .chat-message.error-msg {
+      align-self: flex-start;
+      background-color: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      color: var(--vscode-errorForeground);
+      border-bottom-left-radius: 4px;
+    }
+
+    .chat-message .label {
+      font-size: 0.75em;
+      opacity: 0.7;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .sql-container {
+      position: relative;
+      width: 100%;
+    }
+
+    .sql-copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--vscode-button-secondaryBackground);
+      border: none;
+      padding: 4px 6px;
       border-radius: 4px;
-      font-family: inherit;
-    }
-
-    button:hover {
-      background-color: var(--vscode-button-hoverBackground);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .sql-section {
-      margin-bottom: 20px;
-    }
-
-    .sql-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-
-    .sql-toggle {
-      display: flex;
-      align-items: center;
-      gap: 8px;
       cursor: pointer;
-      font-size: 0.9em;
-      color: var(--vscode-textLink-foreground);
+      opacity: 0.7;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--vscode-button-secondaryForeground);
     }
 
-    .sql-toggle:hover {
-      text-decoration: underline;
+    .sql-copy-btn:hover {
+      opacity: 1;
+      background: var(--vscode-button-secondaryHoverBackground);
     }
 
-    .sql-editor {
+    .sql-copy-btn.copied {
+      background: var(--vscode-testing-iconPassed);
+      color: var(--vscode-editor-background);
+    }
+
+    .sql-content {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 12px;
+      padding-right: 60px;
+      background-color: var(--vscode-textCodeBlock-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 6px;
+      min-height: 100px;
+    }
+
+    .sql-editor-inline {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 13px;
       width: 100%;
       min-height: 120px;
       padding: 12px;
-      background-color: var(--vscode-textCodeBlock-background);
+      padding-right: 60px;
+      background-color: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border);
-      border-radius: 4px;
-      font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 13px;
-      color: var(--vscode-foreground);
+      border-radius: 6px;
       resize: vertical;
-      white-space: pre;
-      overflow-x: auto;
     }
 
-    .sql-editor:focus {
+    .sql-editor-inline:focus {
       outline: 1px solid var(--vscode-focusBorder);
       border-color: var(--vscode-focusBorder);
-    }
-
-    .sql-editor.hidden {
-      display: none;
     }
 
     .sql-actions {
       display: flex;
-      gap: 10px;
-      margin-top: 12px;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
       align-items: center;
     }
 
-    .sql-actions.hidden {
-      display: none;
+    .btn-resume {
+      background-color: var(--vscode-editorWarning-foreground);
+      color: var(--vscode-editor-background);
     }
 
-    .btn-secondary {
-      background-color: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
+    .btn-resume:hover {
+      opacity: 0.9;
     }
 
-    .btn-secondary:hover {
-      background-color: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .validation-error {
-      margin-top: 12px;
-      padding: 12px;
+    .validation-error-inline {
+      margin-top: 10px;
+      padding: 10px;
       background-color: var(--vscode-inputValidation-errorBackground);
       border: 1px solid var(--vscode-inputValidation-errorBorder);
       border-radius: 4px;
     }
 
-    .validation-error.hidden {
-      display: none;
-    }
-
-    .validation-error-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    .validation-error-inline .error-header {
       font-weight: 600;
       color: var(--vscode-errorForeground);
-      margin-bottom: 8px;
+      margin-bottom: 6px;
+      font-size: 0.85em;
     }
 
-    .validation-error-message {
-      font-size: 0.9em;
-      color: var(--vscode-foreground);
-      margin-bottom: 12px;
-      white-space: pre-wrap;
+    .validation-error-inline .error-text {
+      font-size: 0.85em;
       font-family: var(--vscode-editor-font-family, monospace);
+      white-space: pre-wrap;
     }
 
-    .validation-error-actions {
-      display: flex;
-      gap: 10px;
-    }
-
-    .error-message {
-      padding: 12px;
-      background-color: var(--vscode-inputValidation-errorBackground);
-      border: 1px solid var(--vscode-inputValidation-errorBorder);
-      color: var(--vscode-errorForeground);
+    .verification-inline {
+      margin-top: 8px;
+      padding: 8px 10px;
       border-radius: 4px;
-      margin-bottom: 16px;
-    }
-
-    .results-section {
-      margin-top: 20px;
-    }
-
-    .results-info {
-      font-size: 0.9em;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 12px;
-    }
-
-    .table-container {
-      overflow-x: auto;
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    th, td {
-      padding: 8px 12px;
-      text-align: left;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-
-    th {
-      background-color: var(--vscode-editor-lineHighlightBackground);
-      font-weight: 600;
-      position: sticky;
-      top: 0;
-      cursor: pointer;
-    }
-
-    th:hover {
-      background-color: var(--vscode-list-hoverBackground);
-    }
-
-    tr:hover {
-      background-color: var(--vscode-list-hoverBackground);
-    }
-
-    .pagination {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-top: 12px;
-      font-size: 0.9em;
-    }
-
-    .pagination button {
-      padding: 4px 8px;
-      font-size: 12px;
-    }
-
-    .loading {
+      font-size: 0.85em;
       display: flex;
       align-items: center;
       gap: 8px;
-      color: var(--vscode-descriptionForeground);
     }
 
-    .spinner {
-      width: 16px;
-      height: 16px;
-      border: 2px solid var(--vscode-progressBar-background);
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .hidden {
-      display: none !important;
-    }
-
-    .verification-section {
-      margin-bottom: 16px;
-      padding: 12px;
-      border-radius: 4px;
-      font-size: 0.9em;
-    }
-
-    .verification-section.valid {
+    .verification-inline.valid {
       background-color: var(--vscode-inputValidation-infoBackground);
       border: 1px solid var(--vscode-inputValidation-infoBorder);
     }
 
-    .verification-section.corrected {
+    .verification-inline.corrected {
       background-color: var(--vscode-inputValidation-warningBackground);
       border: 1px solid var(--vscode-inputValidation-warningBorder);
-    }
-
-    .verification-header {
-      font-weight: 600;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .verification-issues {
-      margin-top: 8px;
-      padding-left: 16px;
-    }
-
-    .verification-issues li {
-      margin-bottom: 4px;
-    }
-
-    .clarification-section {
-      margin-bottom: 16px;
-      padding: 16px;
-      background-color: var(--vscode-inputValidation-warningBackground);
-      border: 1px solid var(--vscode-inputValidation-warningBorder);
-      border-radius: 4px;
-    }
-
-    .clarification-question {
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: var(--vscode-foreground);
-    }
-
-    .clarification-input {
-      width: 100%;
-      padding: 10px;
-      font-size: 14px;
-      border: 1px solid var(--vscode-input-border);
-      background-color: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border-radius: 4px;
-      font-family: inherit;
-      margin-bottom: 12px;
-    }
-
-    .clarification-input:focus {
-      outline: 1px solid var(--vscode-focusBorder);
-      border-color: var(--vscode-focusBorder);
-    }
-
-    .clarification-buttons {
-      display: flex;
-      gap: 10px;
     }
 
     .confidence-badge {
       display: inline-block;
       padding: 2px 8px;
       border-radius: 10px;
-      font-size: 0.8em;
+      font-size: 0.75em;
       font-weight: 500;
     }
 
@@ -608,179 +523,235 @@ export class QueryPanel {
       color: var(--vscode-editor-background);
     }
 
-    .history-section {
-      margin-bottom: 20px;
-      max-height: 400px;
-      overflow-y: auto;
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px;
-    }
-
-    .history-section.hidden {
-      display: none;
-    }
-
-    .history-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      background-color: var(--vscode-editor-lineHighlightBackground);
-      border-bottom: 1px solid var(--vscode-panel-border);
-      font-weight: 600;
-      font-size: 0.9em;
-      position: sticky;
-      top: 0;
-      z-index: 1;
-    }
-
-    .history-toggle {
-      cursor: pointer;
-      color: var(--vscode-textLink-foreground);
-      font-size: 0.85em;
-      font-weight: normal;
-    }
-
-    .history-toggle:hover {
-      text-decoration: underline;
-    }
-
-    .history-messages {
+    .clarification-inline {
+      margin-top: 10px;
       padding: 12px;
-    }
-
-    .history-messages.collapsed {
-      display: none;
-    }
-
-    .history-message {
-      padding: 8px 12px;
-      margin-bottom: 8px;
-      border-radius: 4px;
-      font-size: 0.9em;
-    }
-
-    .history-message:last-child {
-      margin-bottom: 0;
-    }
-
-    .history-message.user {
-      background-color: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      margin-left: 20%;
-    }
-
-    .history-message.assistant {
       background-color: var(--vscode-inputValidation-warningBackground);
       border: 1px solid var(--vscode-inputValidation-warningBorder);
-      margin-right: 20%;
+      border-radius: 4px;
     }
 
-    .history-message.sql {
-      background-color: var(--vscode-textCodeBlock-background);
-      font-family: var(--vscode-editor-font-family, monospace);
-      white-space: pre-wrap;
-      margin-right: 20%;
+    .clarification-inline .question {
+      font-weight: 600;
+      margin-bottom: 10px;
     }
 
-    .history-message.result {
-      background-color: var(--vscode-inputValidation-infoBackground);
-      border: 1px solid var(--vscode-inputValidation-infoBorder);
-      margin-right: 20%;
+    .clarification-inline input {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 13px;
+      border: 1px solid var(--vscode-input-border);
+      background-color: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border-radius: 4px;
+      margin-bottom: 10px;
     }
 
-    .history-message.error {
-      background-color: var(--vscode-inputValidation-errorBackground);
-      border: 1px solid var(--vscode-inputValidation-errorBorder);
-      color: var(--vscode-errorForeground);
-      margin-right: 20%;
+    .clarification-inline input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      border-color: var(--vscode-focusBorder);
     }
 
-    .history-message-label {
-      font-size: 0.75em;
-      opacity: 0.7;
-      margin-bottom: 4px;
-      text-transform: uppercase;
+    .clarification-inline .buttons {
+      display: flex;
+      gap: 8px;
     }
 
-    .history-message-time {
-      font-size: 0.7em;
+    .input-section {
+      padding: 16px;
+      background-color: var(--vscode-editor-background);
+      border-top: 1px solid var(--vscode-panel-border);
+      flex-shrink: 0;
+    }
+
+    .input-wrapper {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .query-input {
+      flex: 1;
+      min-height: 60px;
+      max-height: 150px;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid var(--vscode-input-border);
+      background-color: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border-radius: 8px;
+      resize: none;
+      font-family: inherit;
+    }
+
+    .query-input:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      border-color: var(--vscode-focusBorder);
+    }
+
+    .query-input::placeholder {
+      color: var(--vscode-input-placeholderForeground);
+    }
+
+    button {
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      background-color: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 4px;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      background-color: var(--vscode-button-hoverBackground);
+    }
+
+    button:disabled {
       opacity: 0.5;
-      float: right;
+      cursor: not-allowed;
+    }
+
+    button.btn-secondary {
+      background-color: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    button.btn-secondary:hover {
+      background-color: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .send-button {
+      height: 40px;
+      min-width: 80px;
+    }
+
+    .loading-inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--vscode-progressBar-background);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .typing-indicator {
+      align-self: flex-start;
+      padding: 12px 16px;
+      background-color: var(--vscode-textCodeBlock-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 12px;
+      border-bottom-left-radius: 4px;
+    }
+
+    .typing-dots {
+      display: flex;
+      gap: 4px;
+    }
+
+    .typing-dots span {
+      width: 8px;
+      height: 8px;
+      background-color: var(--vscode-descriptionForeground);
+      border-radius: 50%;
+      animation: typing 1.4s infinite ease-in-out;
+    }
+
+    .typing-dots span:nth-child(1) { animation-delay: 0s; }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes typing {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-4px); opacity: 1; }
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--vscode-descriptionForeground);
+      text-align: center;
+      padding: 40px;
+    }
+
+    .empty-state h2 {
+      margin: 0 0 12px 0;
+      color: var(--vscode-foreground);
+      font-size: 1.2em;
+    }
+
+    .empty-state p {
+      margin: 0 0 8px 0;
+      font-size: 0.9em;
+    }
+
+    .empty-state .examples {
+      margin-top: 16px;
+      text-align: left;
+    }
+
+    .empty-state .examples li {
+      margin-bottom: 6px;
+      font-size: 0.85em;
     }
   </style>
 </head>
 <body>
-  <h1>PostgreSQL Agent</h1>
-
-  <div class="status-bar" id="status">Initializing...</div>
-
-  <div class="history-section hidden" id="historySection">
-    <div class="history-header">
-      <span>Chat History</span>
-      <span class="history-toggle" id="historyToggle">Collapse</span>
-    </div>
-    <div class="history-messages" id="historyMessages"></div>
+  <div class="header">
+    <h1>PostgreSQL Agent</h1>
+    <div id="status">Initializing...</div>
   </div>
 
-  <div class="query-section">
-    <textarea
-      class="query-input"
-      id="queryInput"
-      placeholder="Ask a question about your database in plain English...&#10;&#10;Examples:&#10;• Show me all users who signed up last week&#10;• What are the top 10 products by sales?&#10;• List all orders with their customer names"
-    ></textarea>
-    <div class="button-row">
-      <button id="runButton">Run Query</button>
-      <div class="loading hidden" id="loading">
-        <div class="spinner"></div>
-        <span id="loadingText">Processing...</span>
-      </div>
+  <div class="chat-container" id="chatContainer">
+    <div class="empty-state" id="emptyState">
+      <h2>Ask a question about your database</h2>
+      <p>I'll generate SQL queries from natural language.</p>
+      <ul class="examples">
+        <li>Show me all users who signed up last week</li>
+        <li>What are the top 10 products by sales?</li>
+        <li>List all orders with their customer names</li>
+      </ul>
     </div>
   </div>
 
-  <div class="error-message hidden" id="error"></div>
-
-  <div class="clarification-section hidden" id="clarificationSection">
-    <div class="clarification-question" id="clarificationQuestion"></div>
-    <input type="text" class="clarification-input" id="clarificationInput" placeholder="Type your answer here...">
-    <div class="clarification-buttons">
-      <button id="submitClarification">Submit</button>
-      <button id="skipClarification">Run Anyway</button>
+  <div class="typing-indicator hidden" id="typingIndicator">
+    <div class="typing-dots">
+      <span></span>
+      <span></span>
+      <span></span>
     </div>
   </div>
 
-  <div class="verification-section hidden" id="verificationSection">
-    <div class="verification-header">
-      <span id="verificationIcon"></span>
-      <span id="verificationStatus"></span>
-      <span class="confidence-badge" id="confidenceBadge"></span>
-    </div>
-    <ul class="verification-issues hidden" id="verificationIssues"></ul>
-  </div>
-
-  <div class="sql-section hidden" id="sqlSection">
-    <div class="sql-header">
-      <div class="sql-toggle" id="sqlToggle">
-        <span id="sqlArrow">▼</span> Generated SQL (editable)
-      </div>
-    </div>
-    <textarea class="sql-editor" id="sqlEditor" spellcheck="false"></textarea>
-    <div class="sql-actions" id="sqlActions">
-      <button id="runSqlButton">Run SQL</button>
-      <div class="loading hidden" id="sqlLoading">
-        <div class="spinner"></div>
-        <span id="sqlLoadingText">Validating...</span>
-      </div>
-    </div>
-    <div class="validation-error hidden" id="validationError">
-      <div class="validation-error-header">
-        <span>SQL Validation Error</span>
-      </div>
-      <div class="validation-error-message" id="validationErrorMessage"></div>
-      <div class="validation-error-actions">
-        <button id="fixQueryButton">Fix Query</button>
-        <button class="btn-secondary" id="dismissErrorButton">Dismiss</button>
-      </div>
+  <div class="input-section">
+    <div class="input-wrapper">
+      <textarea
+        class="query-input"
+        id="queryInput"
+        placeholder="Ask a question about your database..."
+        rows="2"
+      ></textarea>
+      <button class="send-button" id="sendButton">Send</button>
     </div>
   </div>
 
@@ -788,250 +759,473 @@ export class QueryPanel {
     const vscode = acquireVsCodeApi();
 
     // State
-    let sqlVisible = true;
+    let currentSqlMessageId = null;
     let currentValidationError = null;
+    let messageIdCounter = 0;
 
     // Elements
+    const chatContainer = document.getElementById('chatContainer');
+    const emptyState = document.getElementById('emptyState');
+    const typingIndicator = document.getElementById('typingIndicator');
     const queryInput = document.getElementById('queryInput');
-    const runButton = document.getElementById('runButton');
-    const loading = document.getElementById('loading');
-    const loadingText = document.getElementById('loadingText');
+    const sendButton = document.getElementById('sendButton');
     const status = document.getElementById('status');
-    const error = document.getElementById('error');
-    const sqlSection = document.getElementById('sqlSection');
-    const sqlToggle = document.getElementById('sqlToggle');
-    const sqlArrow = document.getElementById('sqlArrow');
-    const sqlEditor = document.getElementById('sqlEditor');
-    const sqlActions = document.getElementById('sqlActions');
-    const runSqlButton = document.getElementById('runSqlButton');
-    const sqlLoading = document.getElementById('sqlLoading');
-    const sqlLoadingText = document.getElementById('sqlLoadingText');
-    const validationError = document.getElementById('validationError');
-    const validationErrorMessage = document.getElementById('validationErrorMessage');
-    const fixQueryButton = document.getElementById('fixQueryButton');
-    const dismissErrorButton = document.getElementById('dismissErrorButton');
-    const clarificationSection = document.getElementById('clarificationSection');
-    const clarificationQuestion = document.getElementById('clarificationQuestion');
-    const clarificationInput = document.getElementById('clarificationInput');
-    const submitClarification = document.getElementById('submitClarification');
-    const skipClarification = document.getElementById('skipClarification');
-    const verificationSection = document.getElementById('verificationSection');
-    const verificationIcon = document.getElementById('verificationIcon');
-    const verificationStatus = document.getElementById('verificationStatus');
-    const confidenceBadge = document.getElementById('confidenceBadge');
-    const verificationIssues = document.getElementById('verificationIssues');
-    const historySection = document.getElementById('historySection');
-    const historyMessages = document.getElementById('historyMessages');
-    const historyToggle = document.getElementById('historyToggle');
-
-    // History state
-    let historyCollapsed = false;
 
     // Event Listeners
-    runButton.addEventListener('click', runQuery);
+    sendButton.addEventListener('click', sendQuery);
     queryInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        runQuery();
+        e.preventDefault();
+        sendQuery();
       }
     });
 
-    sqlToggle.addEventListener('click', () => {
-      sqlVisible = !sqlVisible;
-      sqlEditor.classList.toggle('hidden', !sqlVisible);
-      sqlActions.classList.toggle('hidden', !sqlVisible);
-      sqlArrow.textContent = sqlVisible ? '▼' : '▶';
+    // Auto-resize textarea
+    queryInput.addEventListener('input', () => {
+      queryInput.style.height = 'auto';
+      queryInput.style.height = Math.min(queryInput.scrollHeight, 150) + 'px';
     });
 
-    runSqlButton.addEventListener('click', runEditedSql);
-    sqlEditor.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        runEditedSql();
-      }
-    });
-
-    fixQueryButton.addEventListener('click', () => {
-      if (currentValidationError) {
-        setSqlLoading(true, 'Fixing query...');
-        hideValidationError();
-        vscode.postMessage({
-          type: 'fixQuery',
-          payload: {
-            sql: sqlEditor.value,
-            error: currentValidationError
-          }
-        });
-      }
-    });
-
-    dismissErrorButton.addEventListener('click', () => {
-      hideValidationError();
-    });
-
-    submitClarification.addEventListener('click', () => {
-      const answer = clarificationInput.value.trim();
-      if (!answer) return;
-
-      clarificationSection.classList.add('hidden');
-      setLoading(true, 'Regenerating SQL...');
-      vscode.postMessage({ type: 'clarificationResponse', payload: answer });
-      clarificationInput.value = '';
-    });
-
-    skipClarification.addEventListener('click', () => {
-      clarificationSection.classList.add('hidden');
-      setLoading(false);
-    });
-
-    clarificationInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        submitClarification.click();
-      }
-    });
-
-    historyToggle.addEventListener('click', () => {
-      historyCollapsed = !historyCollapsed;
-      historyMessages.classList.toggle('collapsed', historyCollapsed);
-      historyToggle.textContent = historyCollapsed ? 'Expand' : 'Collapse';
-    });
-
-    function renderHistory(messages) {
-      if (!messages || messages.length === 0) {
-        historySection.classList.add('hidden');
-        return;
-      }
-
-      historySection.classList.remove('hidden');
-      historyMessages.innerHTML = messages.map(msg => {
-        const time = new Date(msg.timestamp).toLocaleTimeString();
-        const labelMap = {
-          user: 'You',
-          assistant: 'Assistant',
-          sql: 'SQL',
-          result: 'Result',
-          error: 'Error'
-        };
-        return \`
-          <div class="history-message \${msg.type}">
-            <div class="history-message-label">
-              \${labelMap[msg.type] || msg.type}
-              <span class="history-message-time">\${time}</span>
-            </div>
-            \${escapeHtml(msg.content)}
-          </div>
-        \`;
-      }).join('');
-
-      // Scroll to bottom of history
-      historySection.scrollTop = historySection.scrollHeight;
+    function generateMessageId() {
+      return 'msg-' + (++messageIdCounter);
     }
 
-    function runQuery() {
+    function sendQuery() {
       const query = queryInput.value.trim();
       if (!query) return;
 
-      setLoading(true);
-      hideError();
-      hideClarification();
-      hideVerification();
-      hideValidationError();
-      sqlSection.classList.add('hidden');
+      // Hide empty state
+      emptyState.classList.add('hidden');
 
+      // Add user message to chat
+      addUserMessage(query);
+
+      // Clear input
+      queryInput.value = '';
+      queryInput.style.height = 'auto';
+
+      // Show typing indicator
+      showTyping(true);
+
+      // Disable send button
+      sendButton.disabled = true;
+
+      // Send to extension
       vscode.postMessage({ type: 'query', payload: query });
     }
 
-    function runEditedSql() {
-      const sql = sqlEditor.value.trim();
-      if (!sql) return;
-
-      setSqlLoading(true, 'Validating...');
-      hideValidationError();
-      hideError();
-
-      vscode.postMessage({ type: 'runEditedSql', payload: sql });
+    function addUserMessage(text) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message user';
+      msgDiv.textContent = text;
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
     }
 
-    function hideClarification() {
-      clarificationSection.classList.add('hidden');
-      clarificationInput.value = '';
-    }
+    function addSqlMessage(sql, isValid, verification, validationError, isEditable = true) {
+      const msgId = generateMessageId();
+      currentSqlMessageId = msgId;
 
-    function hideVerification() {
-      verificationSection.classList.add('hidden');
-    }
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message sql-message';
+      msgDiv.id = msgId;
+      msgDiv.dataset.sql = sql; // Store original SQL
 
-    function hideValidationError() {
-      validationError.classList.add('hidden');
-      currentValidationError = null;
-    }
-
-    function showValidationError(errorMsg) {
-      currentValidationError = errorMsg;
-      validationErrorMessage.textContent = errorMsg;
-      validationError.classList.remove('hidden');
-      setSqlLoading(false);
-    }
-
-    function showClarification(question) {
-      clarificationQuestion.textContent = question;
-      clarificationSection.classList.remove('hidden');
-      clarificationInput.focus();
-      setLoading(false);
-    }
-
-    function showVerification(verification) {
-      verificationSection.classList.remove('hidden');
-
-      // Set icon and status
-      if (verification.correctedSql) {
-        verificationSection.className = 'verification-section corrected';
-        verificationIcon.textContent = '⚠️';
-        verificationStatus.textContent = 'SQL was corrected';
-      } else if (verification.isValid) {
-        verificationSection.className = 'verification-section valid';
-        verificationIcon.textContent = '✓';
-        verificationStatus.textContent = 'SQL verified';
+      let verificationHtml = '';
+      if (verification) {
+        const vClass = verification.correctedSql ? 'corrected' : 'valid';
+        const vIcon = verification.correctedSql ? '⚠️' : '✓';
+        const vText = verification.correctedSql ? 'SQL was corrected' : 'SQL verified';
+        verificationHtml = \`
+          <div class="verification-inline \${vClass}">
+            <span>\${vIcon} \${vText}</span>
+            <span class="confidence-badge confidence-\${verification.confidence}">\${verification.confidence}</span>
+          </div>
+        \`;
       }
 
-      // Set confidence badge
-      confidenceBadge.textContent = verification.confidence;
-      confidenceBadge.className = 'confidence-badge confidence-' + verification.confidence;
+      let errorHtml = '';
+      if (validationError) {
+        currentValidationError = validationError;
+        errorHtml = \`
+          <div class="validation-error-inline">
+            <div class="error-header">SQL Validation Error</div>
+            <div class="error-text">\${escapeHtml(validationError)}</div>
+          </div>
+        \`;
+      }
 
-      // Show issues if any
-      if (verification.issues && verification.issues.length > 0) {
-        verificationIssues.innerHTML = verification.issues.map(issue =>
-          '<li>' + escapeHtml(issue) + '</li>'
-        ).join('');
-        verificationIssues.classList.remove('hidden');
+      // Use textarea for editable, div for read-only - wrapped in container with copy button
+      const sqlHtml = isEditable
+        ? \`<div class="sql-container">
+            <button class="sql-copy-btn" onclick="copySql('\${msgId}')" title="Copy SQL">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 4h3v1H4v9h9v-3h1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M7 1h6a1 1 0 011 1v6a1 1 0 01-1 1H7a1 1 0 01-1-1V2a1 1 0 011-1zm0 1v6h6V2H7z"/></svg>
+              <span id="copy-text-\${msgId}">Copy</span>
+            </button>
+            <textarea class="sql-editor-inline" id="sql-\${msgId}" spellcheck="false">\${escapeHtml(sql)}</textarea>
+          </div>\`
+        : \`<div class="sql-container">
+            <button class="sql-copy-btn" onclick="copySql('\${msgId}')" title="Copy SQL">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 4h3v1H4v9h9v-3h1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M7 1h6a1 1 0 011 1v6a1 1 0 01-1 1H7a1 1 0 01-1-1V2a1 1 0 011-1zm0 1v6h6V2H7z"/></svg>
+              <span id="copy-text-\${msgId}">Copy</span>
+            </button>
+            <div class="sql-content" id="sql-\${msgId}">\${escapeHtml(sql)}</div>
+          </div>\`;
+
+      const actionsHtml = isValid ? \`
+        <div class="sql-actions">
+          <button onclick="runSql('\${msgId}')">Run Query</button>
+          <button class="btn-secondary btn-resume" onclick="resumeFromHere('\${msgId}')">Resume From Here</button>
+          <div class="loading-inline hidden" id="loading-\${msgId}">
+            <div class="spinner"></div>
+            <span>Executing...</span>
+          </div>
+        </div>
+      \` : \`
+        <div class="sql-actions">
+          <button onclick="fixSql('\${msgId}')">Fix Query</button>
+          <button class="btn-secondary" onclick="dismissError('\${msgId}')">Dismiss</button>
+          <button class="btn-secondary btn-resume" onclick="resumeFromHere('\${msgId}')">Resume From Here</button>
+          <div class="loading-inline hidden" id="loading-\${msgId}">
+            <div class="spinner"></div>
+            <span>Fixing...</span>
+          </div>
+        </div>
+      \`;
+
+      msgDiv.innerHTML = \`
+        \${sqlHtml}
+        \${verificationHtml}
+        \${errorHtml}
+        \${actionsHtml}
+      \`;
+
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
+    }
+
+    function addClarificationMessage(question) {
+      const msgId = generateMessageId();
+
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message assistant';
+      msgDiv.id = msgId;
+
+      msgDiv.innerHTML = \`
+        <div class="label">Clarification Needed</div>
+        <div class="clarification-inline">
+          <div class="question">\${escapeHtml(question)}</div>
+          <input type="text" id="clarification-input-\${msgId}" placeholder="Type your answer here...">
+          <div class="buttons">
+            <button onclick="submitClarification('\${msgId}')">Submit</button>
+            <button class="btn-secondary" onclick="skipClarification('\${msgId}')">Skip</button>
+          </div>
+        </div>
+      \`;
+
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
+
+      // Focus the input
+      setTimeout(() => {
+        const input = document.getElementById('clarification-input-' + msgId);
+        if (input) {
+          input.focus();
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              submitClarification(msgId);
+            }
+          });
+        }
+      }, 100);
+    }
+
+    function addResultMessage(text) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message result';
+      msgDiv.innerHTML = \`
+        <div class="label">Result</div>
+        <div>\${escapeHtml(text)}</div>
+      \`;
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
+    }
+
+    function addErrorMessage(text) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message error-msg';
+      msgDiv.innerHTML = \`
+        <div class="label">Error</div>
+        <div>\${escapeHtml(text)}</div>
+      \`;
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
+    }
+
+    function updateSqlMessage(msgId, sql, isValid, verification, validationError) {
+      const msgDiv = document.getElementById(msgId);
+      if (!msgDiv) {
+        addSqlMessage(sql, isValid, verification, validationError);
+        return;
+      }
+
+      let verificationHtml = '';
+      if (verification) {
+        const vClass = verification.correctedSql ? 'corrected' : 'valid';
+        const vIcon = verification.correctedSql ? '⚠️' : '✓';
+        const vText = verification.correctedSql ? 'SQL was corrected' : 'SQL verified';
+        verificationHtml = \`
+          <div class="verification-inline \${vClass}">
+            <span>\${vIcon} \${vText}</span>
+            <span class="confidence-badge confidence-\${verification.confidence}">\${verification.confidence}</span>
+          </div>
+        \`;
+      }
+
+      let errorHtml = '';
+      if (validationError) {
+        currentValidationError = validationError;
+        errorHtml = \`
+          <div class="validation-error-inline">
+            <div class="error-header">SQL Validation Error</div>
+            <div class="error-text">\${escapeHtml(validationError)}</div>
+          </div>
+        \`;
       } else {
-        verificationIssues.classList.add('hidden');
+        currentValidationError = null;
       }
+
+      const sqlHtml = \`<div class="sql-container">
+        <button class="sql-copy-btn" onclick="copySql('\${msgId}')" title="Copy SQL">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 4h3v1H4v9h9v-3h1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M7 1h6a1 1 0 011 1v6a1 1 0 01-1 1H7a1 1 0 01-1-1V2a1 1 0 011-1zm0 1v6h6V2H7z"/></svg>
+          <span id="copy-text-\${msgId}">Copy</span>
+        </button>
+        <textarea class="sql-editor-inline" id="sql-\${msgId}" spellcheck="false">\${escapeHtml(sql)}</textarea>
+      </div>\`;
+
+      const actionsHtml = isValid ? \`
+        <div class="sql-actions">
+          <button onclick="runSql('\${msgId}')">Run Query</button>
+          <button class="btn-secondary btn-resume" onclick="resumeFromHere('\${msgId}')">Resume From Here</button>
+          <div class="loading-inline hidden" id="loading-\${msgId}">
+            <div class="spinner"></div>
+            <span>Executing...</span>
+          </div>
+        </div>
+      \` : \`
+        <div class="sql-actions">
+          <button onclick="fixSql('\${msgId}')">Fix Query</button>
+          <button class="btn-secondary" onclick="dismissError('\${msgId}')">Dismiss</button>
+          <button class="btn-secondary btn-resume" onclick="resumeFromHere('\${msgId}')">Resume From Here</button>
+          <div class="loading-inline hidden" id="loading-\${msgId}">
+            <div class="spinner"></div>
+            <span>Fixing...</span>
+          </div>
+        </div>
+      \`;
+
+      msgDiv.innerHTML = \`
+        \${sqlHtml}
+        \${verificationHtml}
+        \${errorHtml}
+        \${actionsHtml}
+      \`;
     }
 
-    function setLoading(isLoading, text = 'Processing...') {
-      loading.classList.toggle('hidden', !isLoading);
-      loadingText.textContent = text;
-      runButton.disabled = isLoading;
+    function showTyping(show) {
+      if (show) {
+        chatContainer.appendChild(typingIndicator);
+        typingIndicator.classList.remove('hidden');
+      } else {
+        typingIndicator.classList.add('hidden');
+      }
+      scrollToBottom();
     }
 
-    function setSqlLoading(isLoading, text = 'Processing...') {
-      sqlLoading.classList.toggle('hidden', !isLoading);
-      sqlLoadingText.textContent = text;
-      runSqlButton.disabled = isLoading;
-    }
-
-    function showError(message) {
-      error.textContent = message;
-      error.classList.remove('hidden');
-    }
-
-    function hideError() {
-      error.classList.add('hidden');
+    function scrollToBottom() {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
+    }
+
+    // Helper to get SQL content from either textarea or div
+    function getSqlContent(msgId) {
+      const sqlElement = document.getElementById('sql-' + msgId);
+      if (!sqlElement) return null;
+      // Check if it's a textarea or div
+      return sqlElement.tagName === 'TEXTAREA' ? sqlElement.value : sqlElement.textContent;
+    }
+
+    // Global functions for button handlers
+    window.runSql = function(msgId) {
+      const sql = getSqlContent(msgId);
+      if (!sql) return;
+
+      const loading = document.getElementById('loading-' + msgId);
+      if (loading) loading.classList.remove('hidden');
+
+      vscode.postMessage({ type: 'runEditedSql', payload: sql });
+    };
+
+    window.fixSql = function(msgId) {
+      const sql = getSqlContent(msgId);
+      if (!sql || !currentValidationError) return;
+
+      const loading = document.getElementById('loading-' + msgId);
+      if (loading) {
+        loading.classList.remove('hidden');
+        loading.querySelector('span').textContent = 'Fixing...';
+      }
+
+      vscode.postMessage({
+        type: 'fixQuery',
+        payload: { sql, error: currentValidationError }
+      });
+    };
+
+    window.dismissError = function(msgId) {
+      const msgDiv = document.getElementById(msgId);
+      if (msgDiv) {
+        const errorDiv = msgDiv.querySelector('.validation-error-inline');
+        if (errorDiv) errorDiv.remove();
+      }
+      currentValidationError = null;
+    };
+
+    window.copySql = function(msgId) {
+      const sql = getSqlContent(msgId);
+      if (!sql) return;
+
+      navigator.clipboard.writeText(sql).then(() => {
+        const copyText = document.getElementById('copy-text-' + msgId);
+        const copyBtn = copyText?.parentElement;
+        if (copyText && copyBtn) {
+          copyText.textContent = 'Copied!';
+          copyBtn.classList.add('copied');
+          setTimeout(() => {
+            copyText.textContent = 'Copy';
+            copyBtn.classList.remove('copied');
+          }, 2000);
+        }
+      });
+    };
+
+    window.resumeFromHere = function(msgId) {
+      const msgDiv = document.getElementById(msgId);
+      if (!msgDiv) return;
+
+      // Get the SQL content (edited or original)
+      const sql = getSqlContent(msgId);
+      if (!sql) return;
+
+      // Find the index of this message's parent user message
+      const allMessages = Array.from(chatContainer.querySelectorAll('.chat-message'));
+      const msgIndex = allMessages.indexOf(msgDiv);
+
+      // Find the user message that precedes this SQL message
+      let userMsgIndex = -1;
+      for (let i = msgIndex - 1; i >= 0; i--) {
+        if (allMessages[i].classList.contains('user')) {
+          userMsgIndex = i;
+          break;
+        }
+      }
+
+      // Remove all messages after the user message (including this SQL message)
+      if (userMsgIndex >= 0) {
+        const messagesToRemove = allMessages.slice(userMsgIndex + 1);
+        messagesToRemove.forEach(msg => msg.remove());
+      }
+
+      // Put the user's original question back in the input for editing
+      if (userMsgIndex >= 0) {
+        const userMsg = allMessages[userMsgIndex];
+        const userQuestion = userMsg.textContent;
+        // Remove the user message too so they can re-submit
+        userMsg.remove();
+        queryInput.value = userQuestion;
+        queryInput.focus();
+        queryInput.style.height = 'auto';
+        queryInput.style.height = Math.min(queryInput.scrollHeight, 150) + 'px';
+      }
+
+      // Notify extension to truncate history
+      vscode.postMessage({ type: 'truncateHistory', payload: { fromIndex: userMsgIndex } });
+
+      // Show empty state if no messages left
+      const remainingMessages = chatContainer.querySelectorAll('.chat-message');
+      if (remainingMessages.length === 0) {
+        emptyState.classList.remove('hidden');
+      }
+    };
+
+    window.submitClarification = function(msgId) {
+      const input = document.getElementById('clarification-input-' + msgId);
+      if (!input) return;
+
+      const answer = input.value.trim();
+      if (!answer) return;
+
+      // Add user's answer as a message
+      addUserMessage(answer);
+
+      // Remove the clarification UI
+      const msgDiv = document.getElementById(msgId);
+      if (msgDiv) msgDiv.remove();
+
+      // Show typing
+      showTyping(true);
+      sendButton.disabled = true;
+
+      vscode.postMessage({ type: 'clarificationResponse', payload: answer });
+    };
+
+    window.skipClarification = function(msgId) {
+      const msgDiv = document.getElementById(msgId);
+      if (msgDiv) msgDiv.remove();
+      sendButton.disabled = false;
+    };
+
+    // Render history from saved messages
+    function renderHistory(messages) {
+      if (!messages || messages.length === 0) return;
+
+      emptyState.classList.add('hidden');
+
+      // Find the last SQL message index
+      let lastSqlIndex = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].type === 'sql') {
+          lastSqlIndex = i;
+          break;
+        }
+      }
+
+      messages.forEach((msg, index) => {
+        if (msg.type === 'user') {
+          addUserMessage(msg.content);
+        } else if (msg.type === 'sql') {
+          // Only the last SQL message is editable
+          const isEditable = (index === lastSqlIndex);
+          addSqlMessage(msg.content, true, null, null, isEditable);
+        } else if (msg.type === 'result') {
+          addResultMessage(msg.content);
+        } else if (msg.type === 'error') {
+          addErrorMessage(msg.content);
+        } else if (msg.type === 'assistant') {
+          // Clarification question - just show as assistant message
+          const msgDiv = document.createElement('div');
+          msgDiv.className = 'chat-message assistant';
+          msgDiv.innerHTML = '<div class="label">Assistant</div><div>' + escapeHtml(msg.content) + '</div>';
+          chatContainer.appendChild(msgDiv);
+        }
+      });
+
+      scrollToBottom();
     }
 
     // Message handler
@@ -1041,57 +1235,81 @@ export class QueryPanel {
       switch (message.type) {
         case 'status':
           status.textContent = message.payload;
-          if (message.payload === 'Generating SQL...') {
-            setLoading(true, 'Generating SQL...');
-          } else if (message.payload.startsWith('Executing')) {
-            setSqlLoading(true, 'Executing query...');
-          } else if (message.payload.startsWith('Regenerating')) {
-            setLoading(true, 'Regenerating SQL...');
-          } else if (message.payload.startsWith('Validating')) {
-            setSqlLoading(true, 'Validating SQL...');
-          } else if (message.payload.startsWith('Fixing')) {
-            setSqlLoading(true, 'Fixing query...');
-          } else if (message.payload.includes('results shown')) {
-            setLoading(false);
-            setSqlLoading(false);
+          if (message.payload.includes('results shown')) {
+            sendButton.disabled = false;
+            // Hide any loading indicators
+            document.querySelectorAll('.loading-inline').forEach(el => el.classList.add('hidden'));
           }
           break;
 
-        case 'sql':
-          sqlEditor.value = message.payload;
-          sqlSection.classList.remove('hidden');
-          sqlVisible = true;
-          sqlEditor.classList.remove('hidden');
-          sqlActions.classList.remove('hidden');
-          sqlArrow.textContent = '▼';
-          setLoading(true, 'Verifying SQL...');
+        case 'sqlPendingValidation':
+          showTyping(false);
+          addSqlMessage(message.payload, false, null, null);
+          sendButton.disabled = false;
+          break;
+
+        case 'sqlValidated':
+          showTyping(false);
+          addSqlMessage(message.payload, true, null, null);
+          sendButton.disabled = false;
           break;
 
         case 'verification':
-          showVerification(message.payload);
-          setLoading(false);
-          setSqlLoading(false);
+          // Update the current SQL message with verification info
+          if (currentSqlMessageId) {
+            const msgDiv = document.getElementById(currentSqlMessageId);
+            if (msgDiv) {
+              const verification = message.payload;
+              const vClass = verification.correctedSql ? 'corrected' : 'valid';
+              const vIcon = verification.correctedSql ? '⚠️' : '✓';
+              const vText = verification.correctedSql ? 'SQL was corrected' : 'SQL verified';
+
+              // Check if verification already exists
+              let verificationDiv = msgDiv.querySelector('.verification-inline');
+              if (!verificationDiv) {
+                verificationDiv = document.createElement('div');
+                const sqlContent = msgDiv.querySelector('.sql-content');
+                if (sqlContent) {
+                  sqlContent.insertAdjacentElement('afterend', verificationDiv);
+                }
+              }
+              verificationDiv.className = 'verification-inline ' + vClass;
+              verificationDiv.innerHTML = \`
+                <span>\${vIcon} \${vText}</span>
+                <span class="confidence-badge confidence-\${verification.confidence}">\${verification.confidence}</span>
+              \`;
+            }
+          }
           break;
 
         case 'clarification':
-          const clarificationData = message.payload;
-          showClarification(clarificationData.question);
+          showTyping(false);
+          addClarificationMessage(message.payload.question);
+          sendButton.disabled = false;
           break;
 
         case 'validationError':
-          const errorData = message.payload;
-          showValidationError(errorData.error);
+          showTyping(false);
+          if (currentSqlMessageId) {
+            updateSqlMessage(currentSqlMessageId,
+              document.getElementById('sql-' + currentSqlMessageId)?.textContent || '',
+              false, null, message.payload.error);
+          }
+          sendButton.disabled = false;
+          // Hide loading indicators
+          document.querySelectorAll('.loading-inline').forEach(el => el.classList.add('hidden'));
           break;
 
         case 'validationSuccess':
-          hideValidationError();
-          setSqlLoading(true, 'Executing query...');
+          // Hide loading and let status handle the rest
           break;
 
         case 'error':
-          setLoading(false);
-          setSqlLoading(false);
-          showError(message.payload);
+          showTyping(false);
+          addErrorMessage(message.payload);
+          sendButton.disabled = false;
+          // Hide loading indicators
+          document.querySelectorAll('.loading-inline').forEach(el => el.classList.add('hidden'));
           break;
 
         case 'history':

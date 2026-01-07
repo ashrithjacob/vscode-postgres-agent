@@ -427,6 +427,9 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     };
 
+    // Track current chat history for LLM context
+    let currentHistory = [...history];
+
     const panel = QueryPanel.createOrShow(
       extensionUri,
       // Main query handler
@@ -434,10 +437,16 @@ export async function activate(context: vscode.ExtensionContext) {
         // Save user query
         await saveMessage('user', query);
 
-        const schemaContext = schemaService.getSchemaContext();
-        const sql = await llmService.generateSql(schemaContext, query);
+        // Get the latest chat history for context
+        if (activeConnectionId) {
+          const storedHistory = connectionStorageService.getChatHistory(activeConnectionId);
+          currentHistory = storedHistory.messages;
+        }
 
-        // Verify the generated SQL
+        const schemaContext = schemaService.getSchemaContext();
+        const sql = await llmService.generateSql(schemaContext, query, currentHistory);
+
+        // Verify the generated SQL using LLM
         const verification = await llmService.verifySql(schemaContext, query, sql);
 
         // If clarification is needed, return early with the clarification request
@@ -454,15 +463,29 @@ export async function activate(context: vscode.ExtensionContext) {
         // Use corrected SQL if provided, otherwise use original
         const finalSql = verification.correctedSql || sql;
 
-        // Save SQL
+        // Validate SQL syntax using EXPLAIN before showing Run Query button
+        const validation = await databaseService.validateSql(finalSql);
+
+        if (!validation.isValid) {
+          // SQL is invalid - don't show Run Query button, show Fix Query option instead
+          await saveMessage('sql', finalSql);
+          await saveMessage('error', validation.error || 'Invalid SQL syntax');
+          return {
+            sql: finalSql,
+            verification,
+            validationError: validation.error || 'Invalid SQL syntax',
+            isValidQuery: false
+          };
+        }
+
+        // SQL is valid - save it and return (don't execute yet, wait for user to click Run Query)
         await saveMessage('sql', finalSql);
 
-        const result = await databaseService.executeQuery(finalSql);
-
-        // Save result summary
-        await saveMessage('result', `Query returned ${result.rowCount} rows`, finalSql, result.rowCount);
-
-        return { sql: finalSql, result, verification };
+        return {
+          sql: finalSql,
+          verification,
+          isValidQuery: true
+        };
       },
       // Clarification handler
       async (originalQuestion: string, clarificationAnswer: string) => {
@@ -482,6 +505,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Save SQL
         await saveMessage('sql', finalSql);
+
+        // Validate before executing
+        const validation = await databaseService.validateSql(finalSql);
+        if (!validation.isValid) {
+          throw new Error(validation.error || 'Invalid SQL syntax');
+        }
 
         const result = await databaseService.executeQuery(finalSql);
 
@@ -514,16 +543,37 @@ export async function activate(context: vscode.ExtensionContext) {
         // Save fixed SQL
         await saveMessage('sql', fixedSql);
 
-        const result = await databaseService.executeQuery(fixedSql);
+        // Validate the fixed SQL before returning
+        const validation = await databaseService.validateSql(fixedSql);
 
-        // Save result summary
-        await saveMessage('result', `Query returned ${result.rowCount} rows`, fixedSql, result.rowCount);
+        if (!validation.isValid) {
+          // Fixed SQL is still invalid - return error so user can try again
+          await saveMessage('error', validation.error || 'Invalid SQL syntax');
+          return {
+            sql: fixedSql,
+            validationError: validation.error || 'Invalid SQL syntax',
+            isValidQuery: false
+          };
+        }
 
-        return { sql: fixedSql, result };
+        // SQL is now valid - return without executing (user will click Run SQL)
+        return {
+          sql: fixedSql,
+          isValidQuery: true
+        };
       },
       // Show results handler
       (sql: string, result: QueryResult) => {
         ResultsPanel.show(sql, result);
+      },
+      // Truncate history handler
+      async (fromIndex: number) => {
+        if (activeConnectionId) {
+          await connectionStorageService.truncateChatHistory(activeConnectionId, fromIndex);
+          // Update the current history
+          const storedHistory = connectionStorageService.getChatHistory(activeConnectionId);
+          currentHistory = storedHistory.messages;
+        }
       },
       // Initial history
       history

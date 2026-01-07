@@ -1,8 +1,13 @@
-import { LlmConfig, SqlVerificationResult } from '../types';
+import { LlmConfig, SqlVerificationResult, ChatMessage as StoredChatMessage } from '../types';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+// Conversation context for maintaining chat history
+export interface ConversationContext {
+  messages: StoredChatMessage[];
 }
 
 interface ChatCompletionResponse {
@@ -24,7 +29,7 @@ export class LlmService {
     return this.config !== null;
   }
 
-  async generateSql(schemaContext: string, userQuestion: string): Promise<string> {
+  async generateSql(schemaContext: string, userQuestion: string, conversationHistory?: StoredChatMessage[]): Promise<string> {
     if (!this.config) {
       throw new Error('LLM not configured. Please configure the LLM first.');
     }
@@ -41,12 +46,31 @@ Rules:
 4. Never generate destructive operations (DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE)
 5. If the question is ambiguous, make reasonable assumptions based on the schema
 6. Use appropriate JOINs when querying related tables
-7. Always use proper column names from the schema provided`;
+7. Always use proper column names from the schema provided
+8. If the user refers to previous queries or results (e.g., "show me the same but...", "modify that to...", "add a filter for..."), use the conversation history to understand the context`;
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userQuestion },
     ];
+
+    // Add conversation history for context (limit to last 10 exchanges to avoid token limits)
+    if (conversationHistory && conversationHistory.length > 0) {
+      const recentHistory = conversationHistory.slice(-20); // Last 20 messages
+      for (const msg of recentHistory) {
+        if (msg.type === 'user') {
+          messages.push({ role: 'user', content: msg.content });
+        } else if (msg.type === 'sql') {
+          messages.push({ role: 'assistant', content: `Generated SQL:\n${msg.content}` });
+        } else if (msg.type === 'result') {
+          messages.push({ role: 'assistant', content: msg.content });
+        } else if (msg.type === 'error') {
+          messages.push({ role: 'assistant', content: `Error: ${msg.content}` });
+        }
+      }
+    }
+
+    // Add the current question
+    messages.push({ role: 'user', content: userQuestion });
 
     const response = await this.callApi(messages);
     return this.extractSql(response);

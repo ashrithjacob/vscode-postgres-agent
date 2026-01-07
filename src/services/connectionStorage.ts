@@ -119,6 +119,12 @@ export class ConnectionStorageService {
     await this.globalState.update(HISTORY_PREFIX + connectionId, []);
   }
 
+  async truncateChatHistory(connectionId: string, keepCount: number): Promise<void> {
+    const history = this.getChatHistory(connectionId);
+    const truncatedMessages = history.messages.slice(0, keepCount);
+    await this.globalState.update(HISTORY_PREFIX + connectionId, truncatedMessages);
+  }
+
   async connectionExists(name: string): Promise<boolean> {
     const connections = await this.getSavedConnections();
     return connections.some(c => c.name.toLowerCase() === name.toLowerCase());
