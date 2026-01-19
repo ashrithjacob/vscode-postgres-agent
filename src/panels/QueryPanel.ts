@@ -1295,6 +1295,7 @@ export class QueryPanel {
         case 'status':
           status.textContent = message.payload;
           if (message.payload.includes('results shown')) {
+            showTyping(false);
             sendButton.disabled = false;
             // Hide any loading indicators
             document.querySelectorAll('.loading-inline').forEach(el => el.classList.add('hidden'));
