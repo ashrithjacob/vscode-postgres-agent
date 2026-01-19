@@ -137,6 +137,35 @@ export class DatabaseService {
     }
   }
 
+  async getSampleValues(tableName: string, columnName: string, limit: number = 5): Promise<string[]> {
+    if (!this.pool) {
+      return [];
+    }
+
+    try {
+      // Get most common non-null values for the column
+      const query = `
+        SELECT ${this.quoteIdentifier(columnName)}::text as value, COUNT(*) as cnt
+        FROM ${this.quoteIdentifier(tableName)}
+        WHERE ${this.quoteIdentifier(columnName)} IS NOT NULL
+          AND ${this.quoteIdentifier(columnName)}::text != ''
+        GROUP BY ${this.quoteIdentifier(columnName)}
+        ORDER BY cnt DESC
+        LIMIT $1
+      `;
+      const result = await this.pool.query(query, [limit]);
+      return result.rows.map(row => row.value);
+    } catch {
+      // If query fails (e.g., column type issues), return empty array
+      return [];
+    }
+  }
+
+  private quoteIdentifier(identifier: string): string {
+    // Escape double quotes and wrap in double quotes for safe identifier usage
+    return `"${identifier.replace(/"/g, '""')}"`;
+  }
+
   async validateSql(sql: string): Promise<{ isValid: boolean; error?: string }> {
     if (!this.pool) {
       return { isValid: false, error: 'Not connected to database' };

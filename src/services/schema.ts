@@ -9,8 +9,40 @@ export class SchemaService {
 
   async refresh(): Promise<void> {
     const columns = await this.databaseService.introspectSchema();
+
+    // Fetch sample values for string columns
+    await this.enrichWithSampleValues(columns);
+
     this.schema = this.buildSchema(columns);
     this.schemaContext = this.formatSchemaContext(this.schema);
+  }
+
+  private isStringType(dataType: string): boolean {
+    const stringTypes = [
+      'text', 'character varying', 'varchar', 'character', 'char',
+      'name', 'citext', 'uuid'
+    ];
+    return stringTypes.some(t => dataType.toLowerCase().includes(t));
+  }
+
+  private async enrichWithSampleValues(columns: ColumnInfo[]): Promise<void> {
+    // Fetch sample values for string columns (limit to avoid slow queries on large tables)
+    const stringColumns = columns.filter(col => this.isStringType(col.dataType));
+
+    // Process in parallel with a reasonable concurrency
+    const batchSize = 10;
+    for (let i = 0; i < stringColumns.length; i += batchSize) {
+      const batch = stringColumns.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (col) => {
+          col.sampleValues = await this.databaseService.getSampleValues(
+            col.tableName,
+            col.columnName,
+            5
+          );
+        })
+      );
+    }
   }
 
   getSchema(): DatabaseSchema | null {
@@ -71,6 +103,14 @@ export class SchemaService {
 
         if (col.columnDefault) {
           colDesc += ` DEFAULT ${col.columnDefault}`;
+        }
+
+        // Add sample values for string columns
+        if (col.sampleValues && col.sampleValues.length > 0) {
+          const samples = col.sampleValues
+            .map(v => `"${v.length > 30 ? v.substring(0, 30) + '...' : v}"`)
+            .join(', ');
+          colDesc += ` [examples: ${samples}]`;
         }
 
         lines.push(colDesc);

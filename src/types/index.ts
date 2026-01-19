@@ -22,6 +22,7 @@ export interface ColumnInfo {
   constraintType: string | null;
   foreignTable: string | null;
   foreignColumn: string | null;
+  sampleValues?: string[];
 }
 
 export interface TableSchema {
