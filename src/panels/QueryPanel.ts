@@ -102,12 +102,10 @@ export class QueryPanel {
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
 
-    // If panel exists, dispose it to create a new one with fresh history
-    if (QueryPanel.currentPanel && initialHistory.length > 0) {
+    // Always dispose existing panel to ensure fresh state for the connection
+    // This is important when switching between different database connections
+    if (QueryPanel.currentPanel) {
       QueryPanel.currentPanel.dispose();
-    } else if (QueryPanel.currentPanel) {
-      QueryPanel.currentPanel.panel.reveal(column);
-      return QueryPanel.currentPanel;
     }
 
     const panel = vscode.window.createWebviewPanel(

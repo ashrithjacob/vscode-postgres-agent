@@ -17,6 +17,7 @@ let connectionStorageService: ConnectionStorageService;
 let connectionsProvider: ConnectionsProvider;
 let statusBarItem: vscode.StatusBarItem;
 let activeConnectionId: string | null = null;
+let sessionConnectionId: string | null = null; // Temporary ID for unsaved connections
 
 export async function activate(context: vscode.ExtensionContext) {
   // Initialize services
@@ -222,6 +223,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
       updateStatusBar();
       activeConnectionId = null;
+      // Generate a session ID for unsaved connections to track history
+      sessionConnectionId = `session-${Date.now()}`;
       connectionsProvider.setActiveConnection(null);
 
       const tableCount = schemaService.getSchema()?.tables.length || 0;
@@ -269,6 +272,23 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     const savedConnection = await connectionStorageService.saveConnection(name.trim(), creds);
+
+    // Migrate session history to the saved connection if exists
+    if (sessionConnectionId) {
+      const sessionHistory = connectionStorageService.getChatHistory(sessionConnectionId);
+      for (const message of sessionHistory.messages) {
+        await connectionStorageService.saveChatMessage(savedConnection.id, {
+          type: message.type,
+          content: message.content,
+          sql: message.sql,
+          rowCount: message.rowCount,
+        });
+      }
+      // Clear session history
+      await connectionStorageService.clearChatHistory(sessionConnectionId);
+      sessionConnectionId = null;
+    }
+
     activeConnectionId = savedConnection.id;
     connectionsProvider.setActiveConnection(savedConnection.id);
     vscode.window.showInformationMessage(`Connection "${name}" saved.`);
@@ -300,6 +320,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
 
       activeConnectionId = connection.id;
+      sessionConnectionId = null; // Clear any session ID when switching to saved connection
       connectionsProvider.setActiveConnection(connection.id);
       updateStatusBar();
 
@@ -379,7 +400,12 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   async function openQueryPanel() {
-    await openQueryPanelWithHistory([]);
+    // Load history from active connection (saved) or session connection (unsaved)
+    const connectionId = activeConnectionId || sessionConnectionId;
+    const history = connectionId
+      ? connectionStorageService.getChatHistory(connectionId).messages
+      : [];
+    await openQueryPanelWithHistory(history);
   }
 
   async function openQueryPanelWithHistory(history: ChatMessage[]) {
@@ -417,8 +443,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Helper to save messages to history
     const saveMessage = async (type: ChatMessage['type'], content: string, sql?: string, rowCount?: number) => {
-      if (activeConnectionId) {
-        await connectionStorageService.saveChatMessage(activeConnectionId, {
+      const connectionId = activeConnectionId || sessionConnectionId;
+      if (connectionId) {
+        await connectionStorageService.saveChatMessage(connectionId, {
           type,
           content,
           sql,
@@ -440,8 +467,9 @@ export async function activate(context: vscode.ExtensionContext) {
         await saveMessage('user', query);
 
         // Get the latest chat history for context
-        if (activeConnectionId) {
-          const storedHistory = connectionStorageService.getChatHistory(activeConnectionId);
+        const connectionId = activeConnectionId || sessionConnectionId;
+        if (connectionId) {
+          const storedHistory = connectionStorageService.getChatHistory(connectionId);
           currentHistory = storedHistory.messages;
         }
 
