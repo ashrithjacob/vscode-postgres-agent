@@ -1,4 +1,4 @@
-import { LlmConfig, SqlVerificationResult, ChatMessage as StoredChatMessage } from '../types';
+import { LlmConfig, SqlVerificationResult, ChatMessage as StoredChatMessage, ConditionIssue } from '../types';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -323,6 +323,57 @@ Error message:
 ${error}
 
 Please fix the SQL query to resolve the error.`;
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ];
+
+    const response = await this.callApi(messages);
+    return this.extractSql(response);
+  }
+
+  /**
+   * Fix SQL query when condition validation found issues
+   * (e.g., ILIKE on wrong column)
+   */
+  async fixConditions(
+    schemaContext: string,
+    originalSql: string,
+    issues: ConditionIssue[],
+    originalQuestion: string
+  ): Promise<string> {
+    if (!this.config) {
+      throw new Error('LLM not configured. Please configure the LLM first.');
+    }
+
+    const issueDescriptions = issues.map(issue =>
+      `- The search '${issue.searchValue}' using ${issue.operator} on column '${issue.originalColumn}' found no matches, ` +
+      `but matches exist in column '${issue.suggestedColumn}' of table '${issue.tableName}'`
+    ).join('\n');
+
+    const systemPrompt = `You are a PostgreSQL expert. Fix SQL queries where the WHERE conditions target the wrong columns.
+
+Database Schema:
+${schemaContext}
+
+Rules:
+1. Return ONLY the corrected SQL query, no explanations, no markdown code blocks, just raw SQL
+2. Fix the column references in WHERE clauses based on the issues found
+3. Preserve the original intent of the query
+4. Use proper escaping for identifiers if needed
+5. Limit results to 100 rows unless specified otherwise
+6. Never generate destructive operations (DROP, DELETE, TRUNCATE, UPDATE, INSERT, ALTER, CREATE, GRANT, REVOKE)`;
+
+    const userPrompt = `Original Question: "${originalQuestion}"
+
+Original SQL:
+${originalSql}
+
+Issues found with WHERE conditions:
+${issueDescriptions}
+
+Please fix the SQL query by using the suggested columns instead of the original ones where indicated.`;
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },

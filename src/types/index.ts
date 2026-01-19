@@ -51,6 +51,21 @@ export interface SqlValidationResult {
   error?: string;
 }
 
+export interface ConditionIssue {
+  originalColumn: string;
+  suggestedColumn: string;
+  tableName: string;
+  searchValue: string;
+  operator: string;
+  reason: string;
+}
+
+export interface ConditionValidationResult {
+  hasIssues: boolean;
+  issues: ConditionIssue[];
+  suggestedSql?: string;
+}
+
 export interface SqlVerificationResult {
   isValid: boolean;
   correctedSql?: string;

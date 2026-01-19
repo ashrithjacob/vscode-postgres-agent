@@ -517,6 +517,30 @@ export async function activate(context: vscode.ExtensionContext) {
           const validation = await databaseService.validateSql(currentSql);
 
           if (validation.isValid) {
+            // SQL syntax is valid - now check if conditions make sense
+            const schema = schemaService.getSchema();
+            if (schema) {
+              const conditionValidation = await databaseService.validateConditions(currentSql, schema);
+
+              if (conditionValidation.hasIssues && conditionValidation.issues.length > 0) {
+                // Conditions don't make sense - use LLM to fix them
+                const fixedSql = await llmService.fixConditions(
+                  schemaContext,
+                  currentSql,
+                  conditionValidation.issues,
+                  query
+                );
+
+                // Validate the fixed SQL
+                const fixedValidation = await databaseService.validateSql(fixedSql);
+                if (fixedValidation.isValid) {
+                  // Fixed SQL is valid - use it instead
+                  currentSql = fixedSql;
+                }
+                // If fixed SQL is invalid, continue with the original
+              }
+            }
+
             // SQL is valid - save it and return
             await saveMessage('sql', currentSql);
             return {
@@ -560,16 +584,34 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Verify the regenerated SQL (should be valid now with clarification)
         const verification = await llmService.verifySql(schemaContext, originalQuestion, sql);
-        const finalSql = verification.correctedSql || sql;
-
-        // Save SQL
-        await saveMessage('sql', finalSql);
+        let finalSql = verification.correctedSql || sql;
 
         // Validate before executing
         const validation = await databaseService.validateSql(finalSql);
         if (!validation.isValid) {
           throw new Error(validation.error || 'Invalid SQL syntax');
         }
+
+        // Check if conditions make sense
+        const schema = schemaService.getSchema();
+        if (schema) {
+          const conditionValidation = await databaseService.validateConditions(finalSql, schema);
+          if (conditionValidation.hasIssues && conditionValidation.issues.length > 0) {
+            const fixedSql = await llmService.fixConditions(
+              schemaContext,
+              finalSql,
+              conditionValidation.issues,
+              originalQuestion
+            );
+            const fixedValidation = await databaseService.validateSql(fixedSql);
+            if (fixedValidation.isValid) {
+              finalSql = fixedSql;
+            }
+          }
+        }
+
+        // Save SQL
+        await saveMessage('sql', finalSql);
 
         const result = await databaseService.executeQuery(finalSql);
 
@@ -597,10 +639,7 @@ export async function activate(context: vscode.ExtensionContext) {
       // Fix query handler
       async (sql: string, error: string, originalQuestion: string) => {
         const schemaContext = schemaService.getSchemaContext();
-        const fixedSql = await llmService.fixSql(schemaContext, sql, error, originalQuestion);
-
-        // Save fixed SQL
-        await saveMessage('sql', fixedSql);
+        let fixedSql = await llmService.fixSql(schemaContext, sql, error, originalQuestion);
 
         // Validate the fixed SQL before returning
         const validation = await databaseService.validateSql(fixedSql);
@@ -614,6 +653,27 @@ export async function activate(context: vscode.ExtensionContext) {
             isValidQuery: false
           };
         }
+
+        // Check if conditions make sense
+        const schema = schemaService.getSchema();
+        if (schema) {
+          const conditionValidation = await databaseService.validateConditions(fixedSql, schema);
+          if (conditionValidation.hasIssues && conditionValidation.issues.length > 0) {
+            const conditionFixedSql = await llmService.fixConditions(
+              schemaContext,
+              fixedSql,
+              conditionValidation.issues,
+              originalQuestion
+            );
+            const conditionValidation2 = await databaseService.validateSql(conditionFixedSql);
+            if (conditionValidation2.isValid) {
+              fixedSql = conditionFixedSql;
+            }
+          }
+        }
+
+        // Save fixed SQL
+        await saveMessage('sql', fixedSql);
 
         // SQL is now valid - return without executing (user will click Run SQL)
         return {
