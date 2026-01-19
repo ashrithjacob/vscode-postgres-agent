@@ -3,11 +3,12 @@
   "displayName": "PostgreSQL Agent",
   "description": "Query PostgreSQL databases using natural language powered by AI",
   "version": "1.0.0",
-  "publisher": "postgres-agent",
+  "publisher": "ashrithjacob",
   "license": "MIT",
+  "icon": "logo.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ash/vscode-postgres-agent"
+    "url": "https://github.com/ashrithjacob/vscode-postgres-agent"
   },
   "engines": {
     "vscode": "^1.85.0"

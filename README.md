@@ -42,6 +42,46 @@ Ask questions in plain English and get results directly in VS Code.
 ### Installation
 
 <details>
+<summary><strong>From VSIX (Recommended)</strong></summary>
+
+Download the latest `.vsix` file from the [Releases](https://github.com/your-username/vscode-postgres-agent/releases) page.
+
+#### VS Code
+
+**Option 1: Via UI**
+1. Open VS Code
+2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+3. Click the `...` menu → **Install from VSIX...**
+4. Select the downloaded `.vsix` file
+
+**Option 2: Via Command Line**
+```bash
+code --install-extension vscode-postgres-agent-1.0.0.vsix
+```
+
+#### Cursor
+
+**Option 1: Via Command Palette**
+1. Open Cursor
+2. Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (Mac)
+3. Type **Install from VSIX** and select it
+4. Navigate to the `.vsix` file and select it
+
+**Option 2: Via Command Line**
+```bash
+cursor --install-extension vscode-postgres-agent-1.0.0.vsix
+```
+
+**Option 3: Drag and Drop**
+1. Open Cursor
+2. Go to Extensions panel (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+3. Drag the `.vsix` file into the Extensions panel
+
+After installation, reload the editor when prompted.
+
+</details>
+
+<details>
 <summary><strong>From Source (Development)</strong></summary>
 
 ```bash
@@ -59,9 +99,9 @@ npm run compile
 npm run build:vsix
 
 # Install in VS Code
-code --install-extension vscode-postgres-agent-0.1.0.vsix
+code --install-extension vscode-postgres-agent-1.0.0.vsix
 # For Cursor users:
-cursor --install-extension vscode-postgres-agent-0.1.0.vsix
+cursor --install-extension vscode-postgres-agent-1.0.0.vsix
 ```
 
 
