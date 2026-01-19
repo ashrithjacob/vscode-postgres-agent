@@ -434,6 +434,8 @@ export async function activate(context: vscode.ExtensionContext) {
       extensionUri,
       // Main query handler
       async (query: string) => {
+        const MAX_RETRIES = 3;
+
         // Save user query
         await saveMessage('user', query);
 
@@ -443,8 +445,25 @@ export async function activate(context: vscode.ExtensionContext) {
           currentHistory = storedHistory.messages;
         }
 
+        // First, check if the query is already valid SQL (optimization to avoid LLM tokens)
+        const directValidation = await databaseService.validateSql(query);
+        if (directValidation.isValid) {
+          // Query is already valid SQL - skip LLM and use it directly
+          await saveMessage('sql', query);
+          return {
+            sql: query,
+            verification: {
+              isValid: true,
+              needsClarification: false,
+              confidence: 'high' as const
+            },
+            isValidQuery: true
+          };
+        }
+
+        // Query is not valid SQL, route to LLM for natural language processing
         const schemaContext = schemaService.getSchemaContext();
-        const sql = await llmService.generateSql(schemaContext, query, currentHistory);
+        let sql = await llmService.generateSql(schemaContext, query, currentHistory);
 
         // Verify the generated SQL using LLM
         const verification = await llmService.verifySql(schemaContext, query, sql);
@@ -461,30 +480,42 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         // Use corrected SQL if provided, otherwise use original
-        const finalSql = verification.correctedSql || sql;
+        let currentSql = verification.correctedSql || sql;
+        let lastError: string | undefined;
 
-        // Validate SQL syntax using EXPLAIN before showing Run Query button
-        const validation = await databaseService.validateSql(finalSql);
+        // Retry loop: validate and fix SQL up to MAX_RETRIES times
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          // Validate SQL syntax using EXPLAIN (programmatic check)
+          const validation = await databaseService.validateSql(currentSql);
 
-        if (!validation.isValid) {
-          // SQL is invalid - don't show Run Query button, show Fix Query option instead
-          await saveMessage('sql', finalSql);
-          await saveMessage('error', validation.error || 'Invalid SQL syntax');
-          return {
-            sql: finalSql,
-            verification,
-            validationError: validation.error || 'Invalid SQL syntax',
-            isValidQuery: false
-          };
+          if (validation.isValid) {
+            // SQL is valid - save it and return
+            await saveMessage('sql', currentSql);
+            return {
+              sql: currentSql,
+              verification,
+              isValidQuery: true
+            };
+          }
+
+          // SQL is invalid - attempt to fix it
+          lastError = validation.error || 'Invalid SQL syntax';
+
+          // Don't retry on the last attempt
+          if (attempt < MAX_RETRIES - 1) {
+            // Use LLM to fix the SQL
+            currentSql = await llmService.fixSql(schemaContext, currentSql, lastError, query);
+          }
         }
 
-        // SQL is valid - save it and return (don't execute yet, wait for user to click Run Query)
-        await saveMessage('sql', finalSql);
-
+        // All retries exhausted - SQL generation failed
+        await saveMessage('error', `Failed to generate valid SQL after ${MAX_RETRIES} attempts. Last error: ${lastError}`);
         return {
-          sql: finalSql,
+          sql: currentSql,
           verification,
-          isValidQuery: true
+          generationFailed: true,
+          lastError: lastError,
+          isValidQuery: false
         };
       },
       // Clarification handler

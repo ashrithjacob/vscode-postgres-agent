@@ -10,6 +10,8 @@ interface QueryResponse {
   executionError?: string;
   validationError?: string;
   isValidQuery?: boolean;
+  generationFailed?: boolean;
+  lastError?: string;
 }
 
 interface ClarificationResponse {
@@ -141,15 +143,13 @@ export class QueryPanel {
         return;
       }
 
-      // Check if SQL validation failed (syntax error from EXPLAIN)
-      if (response.validationError && !response.isValidQuery) {
-        // Show SQL with validation error and Fix Query option - don't show Run Query button
-        this.sendMessage({ type: 'sqlPendingValidation', payload: response.sql });
+      // Check if generation failed after all retries
+      if (response.generationFailed) {
         this.sendMessage({
-          type: 'validationError',
+          type: 'generationFailed',
           payload: {
-            error: response.validationError,
-            sql: response.sql
+            error: response.lastError || 'Failed to generate valid SQL after multiple attempts',
+            originalQuery: query
           }
         });
         return;
@@ -367,6 +367,18 @@ export class QueryPanel {
       border: 1px solid var(--vscode-inputValidation-errorBorder);
       color: var(--vscode-errorForeground);
       border-bottom-left-radius: 4px;
+    }
+
+    .generation-failed-content p {
+      margin: 0 0 8px 0;
+    }
+
+    .generation-failed-content .error-detail {
+      font-size: 0.9em;
+      opacity: 0.9;
+      font-family: var(--vscode-editor-font-family, monospace);
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .chat-message .label {
@@ -962,6 +974,53 @@ export class QueryPanel {
       scrollToBottom();
     }
 
+    function addGenerationFailedMessage(error, originalQuery) {
+      const msgId = generateMessageId();
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message error-msg';
+      msgDiv.id = msgId;
+      msgDiv.dataset.originalQuery = originalQuery;
+      msgDiv.innerHTML = \`
+        <div class="label">SQL Generation Failed</div>
+        <div class="generation-failed-content">
+          <p>Unable to generate a valid SQL query after multiple attempts.</p>
+          <p class="error-detail"><strong>Last error:</strong> \${escapeHtml(error)}</p>
+          <div class="sql-actions" style="margin-top: 12px;">
+            <button onclick="retryQuery('\${msgId}')">Try Again</button>
+            <button class="btn-secondary" onclick="dismissFailure('\${msgId}')">Dismiss</button>
+          </div>
+        </div>
+      \`;
+      chatContainer.appendChild(msgDiv);
+      scrollToBottom();
+    }
+
+    window.retryQuery = function(msgId) {
+      const msgDiv = document.getElementById(msgId);
+      if (!msgDiv) return;
+
+      const originalQuery = msgDiv.dataset.originalQuery;
+      if (!originalQuery) return;
+
+      // Remove the failure message
+      msgDiv.remove();
+
+      // Show typing indicator
+      showTyping(true);
+      sendButton.disabled = true;
+
+      // Re-send the query
+      vscode.postMessage({ type: 'query', payload: originalQuery });
+    };
+
+    window.dismissFailure = function(msgId) {
+      const msgDiv = document.getElementById(msgId);
+      if (msgDiv) {
+        msgDiv.remove();
+      }
+      sendButton.disabled = false;
+    };
+
     function updateSqlMessage(msgId, sql, isValid, verification, validationError) {
       const msgDiv = document.getElementById(msgId);
       if (!msgDiv) {
@@ -1310,6 +1369,12 @@ export class QueryPanel {
           sendButton.disabled = false;
           // Hide loading indicators
           document.querySelectorAll('.loading-inline').forEach(el => el.classList.add('hidden'));
+          break;
+
+        case 'generationFailed':
+          showTyping(false);
+          addGenerationFailedMessage(message.payload.error, message.payload.originalQuery);
+          sendButton.disabled = false;
           break;
 
         case 'history':
