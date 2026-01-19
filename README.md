@@ -44,7 +44,7 @@ Ask questions in plain English and get results directly in VS Code.
 <details>
 <summary><strong>From VSIX (Recommended)</strong></summary>
 
-Download the latest `.vsix` file from the [Releases](https://github.com/your-username/vscode-postgres-agent/releases) page.
+Download the latest `.vsix` file from the [Releases](https://github.com/ashrithjacob/vscode-postgres-agent/releases) page.
 
 #### VS Code
 
