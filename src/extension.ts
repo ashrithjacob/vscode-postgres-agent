@@ -627,11 +627,20 @@ export async function activate(context: vscode.ExtensionContext) {
       },
       // Truncate history handler
       async (fromIndex: number) => {
-        if (activeConnectionId) {
-          await connectionStorageService.truncateChatHistory(activeConnectionId, fromIndex);
+        const connectionId = activeConnectionId || sessionConnectionId;
+        if (connectionId) {
+          await connectionStorageService.truncateChatHistory(connectionId, fromIndex);
           // Update the current history
-          const storedHistory = connectionStorageService.getChatHistory(activeConnectionId);
+          const storedHistory = connectionStorageService.getChatHistory(connectionId);
           currentHistory = storedHistory.messages;
+        }
+      },
+      // Clear history handler
+      async () => {
+        const connectionId = activeConnectionId || sessionConnectionId;
+        if (connectionId) {
+          await connectionStorageService.clearChatHistory(connectionId);
+          currentHistory = [];
         }
       },
       // Initial history

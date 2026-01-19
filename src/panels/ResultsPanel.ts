@@ -369,7 +369,9 @@ export class ResultsPanel {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'query-results.csv';
+      // Add timestamp suffix: query-results-2026-01-19_14-30-45.csv
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_');
+      a.download = 'query-results-' + timestamp + '.csv';
       a.click();
       URL.revokeObjectURL(url);
     }

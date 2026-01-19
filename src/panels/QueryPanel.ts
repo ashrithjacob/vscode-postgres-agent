@@ -50,6 +50,7 @@ export class QueryPanel {
     private readonly onFixQuery: (sql: string, error: string, originalQuestion: string) => Promise<FixQueryResponse>,
     private readonly onShowResults: (sql: string, result: QueryResult) => void,
     private readonly onTruncateHistory: (fromIndex: number) => Promise<void>,
+    private readonly onClearHistory: () => Promise<void>,
     history: ChatMessage[] = []
   ) {
     this.panel = panel;
@@ -80,6 +81,9 @@ export class QueryPanel {
           if (this.onTruncateHistory) {
             await this.onTruncateHistory(payload.fromIndex);
           }
+        } else if (message.type === 'clearChat') {
+          await this.onClearHistory();
+          this.sendMessage({ type: 'chatCleared' });
         }
       },
       null,
@@ -96,6 +100,7 @@ export class QueryPanel {
     onFixQuery: (sql: string, error: string, originalQuestion: string) => Promise<FixQueryResponse>,
     onShowResults: (sql: string, result: QueryResult) => void,
     onTruncateHistory: (fromIndex: number) => Promise<void>,
+    onClearHistory: () => Promise<void>,
     initialHistory: ChatMessage[] = []
   ): QueryPanel {
     const column = vscode.window.activeTextEditor
@@ -118,7 +123,7 @@ export class QueryPanel {
       }
     );
 
-    QueryPanel.currentPanel = new QueryPanel(panel, extensionUri, onQuery, onClarification, onValidateSql, onRunEditedSql, onFixQuery, onShowResults, onTruncateHistory, initialHistory);
+    QueryPanel.currentPanel = new QueryPanel(panel, extensionUri, onQuery, onClarification, onValidateSql, onRunEditedSql, onFixQuery, onShowResults, onTruncateHistory, onClearHistory, initialHistory);
     return QueryPanel.currentPanel;
   }
 
@@ -306,9 +311,29 @@ export class QueryPanel {
       flex-shrink: 0;
     }
 
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
     .header h1 {
       font-size: 1.2em;
       margin: 0 0 4px 0;
+    }
+
+    .btn-clear {
+      padding: 4px 10px;
+      font-size: 12px;
+      background-color: transparent;
+      color: var(--vscode-statusBar-foreground);
+      border: 1px solid var(--vscode-statusBar-foreground);
+      opacity: 0.7;
+    }
+
+    .btn-clear:hover {
+      opacity: 1;
+      background-color: var(--vscode-button-secondaryHoverBackground);
     }
 
     .chat-container {
@@ -729,7 +754,10 @@ export class QueryPanel {
 </head>
 <body>
   <div class="header">
-    <h1>PostgreSQL Agent</h1>
+    <div class="header-top">
+      <h1>PostgreSQL Agent</h1>
+      <button class="btn-clear" id="clearChatBtn" title="Clear chat history">Clear Chat</button>
+    </div>
     <div id="status">Initializing...</div>
   </div>
 
@@ -780,9 +808,11 @@ export class QueryPanel {
     const queryInput = document.getElementById('queryInput');
     const sendButton = document.getElementById('sendButton');
     const status = document.getElementById('status');
+    const clearChatBtn = document.getElementById('clearChatBtn');
 
     // Event Listeners
     sendButton.addEventListener('click', sendQuery);
+    clearChatBtn.addEventListener('click', clearChat);
     queryInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -822,6 +852,25 @@ export class QueryPanel {
 
       // Send to extension
       vscode.postMessage({ type: 'query', payload: query });
+    }
+
+    function clearChat() {
+      // Remove all chat messages
+      const messages = chatContainer.querySelectorAll('.chat-message');
+      messages.forEach(msg => msg.remove());
+
+      // Show empty state
+      emptyState.classList.remove('hidden');
+
+      // Hide typing indicator
+      showTyping(false);
+
+      // Reset state
+      currentSqlMessageId = null;
+      currentValidationError = null;
+
+      // Notify extension to clear history storage
+      vscode.postMessage({ type: 'clearChat' });
     }
 
     function addUserMessage(text) {
@@ -1378,6 +1427,10 @@ export class QueryPanel {
 
         case 'history':
           renderHistory(message.payload);
+          break;
+
+        case 'chatCleared':
+          // Chat was cleared successfully - UI already updated
           break;
       }
     });

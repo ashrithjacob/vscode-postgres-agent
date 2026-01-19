@@ -41,7 +41,7 @@ export interface QueryResult {
 }
 
 export interface WebviewMessage {
-  type: 'query' | 'ready' | 'error' | 'result' | 'status' | 'sql' | 'sqlPendingValidation' | 'sqlValidated' | 'verification' | 'clarification' | 'clarificationResponse' | 'runEditedSql' | 'fixQuery' | 'validationError' | 'validationSuccess' | 'history' | 'truncateHistory' | 'generationFailed';
+  type: 'query' | 'ready' | 'error' | 'result' | 'status' | 'sql' | 'sqlPendingValidation' | 'sqlValidated' | 'verification' | 'clarification' | 'clarificationResponse' | 'runEditedSql' | 'fixQuery' | 'validationError' | 'validationSuccess' | 'history' | 'truncateHistory' | 'generationFailed' | 'clearChat' | 'chatCleared';
   payload?: unknown;
 }
 
