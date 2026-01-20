@@ -2,7 +2,7 @@
   "name": "vscode-postgres-agent",
   "displayName": "PostgreSQL Agent",
   "description": "Query PostgreSQL databases using natural language powered by AI",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publisher": "ashrithjacob",
   "license": "MIT",
   "icon": "logo.png",

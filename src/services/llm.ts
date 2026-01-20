@@ -47,20 +47,39 @@ Rules:
 5. If the question is ambiguous, make reasonable assumptions based on the schema
 6. Use appropriate JOINs when querying related tables
 7. Always use proper column names from the schema provided
-8. If the user refers to previous queries or results (e.g., "show me the same but...", "modify that to...", "add a filter for..."), use the conversation history to understand the context`;
+
+CRITICAL - FOLLOW-UP QUERY HANDLING:
+When the user asks to modify, extend, or reference a previous query (phrases like "also add", "also give", "include", "from above", "see history", "previous query", "that query", etc.):
+1. Look for the MOST RECENT SQL query in the conversation history below
+2. MODIFY that exact query by adding/changing only what the user requested
+3. PRESERVE all existing SELECT columns, WHERE clauses, JOINs, filters, and conditions from the original
+4. DO NOT create a brand new query - always build upon the previous one
+5. If adding columns, add them to the existing SELECT list
+6. If changing filters, update the existing WHERE clause
+
+Example:
+Previous query: SELECT id, name FROM users WHERE age > 25
+User: "also give email and phone"
+Correct: SELECT id, name, email, phone FROM users WHERE age > 25
+Wrong: SELECT email, phone FROM users  ← Missing original columns and WHERE clause!`;
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
     ];
 
-    // Add conversation history for context (limit to last 10 exchanges to avoid token limits)
+    // Detect if this is a follow-up/modification request
+    const isFollowUp = this.detectFollowUpQuery(userQuestion);
+    let lastSqlQuery: string | null = null;
+
+    // Add conversation history for context (limit to last 20 messages to avoid token limits)
     if (conversationHistory && conversationHistory.length > 0) {
       const recentHistory = conversationHistory.slice(-20); // Last 20 messages
       for (const msg of recentHistory) {
         if (msg.type === 'user') {
           messages.push({ role: 'user', content: msg.content });
         } else if (msg.type === 'sql') {
-          messages.push({ role: 'assistant', content: `Generated SQL:\n${msg.content}` });
+          lastSqlQuery = msg.content; // Track the most recent SQL
+          messages.push({ role: 'assistant', content: `I generated this SQL query:\n\`\`\`sql\n${msg.content}\n\`\`\`\n(This is the most recent query I generated)` });
         } else if (msg.type === 'result') {
           messages.push({ role: 'assistant', content: msg.content });
         } else if (msg.type === 'error') {
@@ -69,11 +88,60 @@ Rules:
       }
     }
 
+    // If this is a follow-up query and we have a previous SQL, inject explicit context
+    if (isFollowUp && lastSqlQuery) {
+      messages.push({
+        role: 'system',
+        content: `IMPORTANT: The user is asking to MODIFY the previous query. Here it is again for reference:
+
+\`\`\`sql
+${lastSqlQuery}
+\`\`\`
+
+You MUST modify this query according to the user's request. Keep all existing columns, WHERE clauses, JOINs, and filters unless the user explicitly asks to remove them.`
+      });
+    }
+
     // Add the current question
     messages.push({ role: 'user', content: userQuestion });
 
     const response = await this.callApi(messages);
     return this.extractSql(response);
+  }
+
+  /**
+   * Detect if the user's question is asking to modify a previous query
+   */
+  private detectFollowUpQuery(userQuestion: string): boolean {
+    const lowerQuestion = userQuestion.toLowerCase();
+
+    // Phrases that indicate the user wants to modify a previous query
+    const followUpPhrases = [
+      'also give',
+      'also add',
+      'also include',
+      'also show',
+      'add ',
+      'include ',
+      'from above',
+      'see above',
+      'from history',
+      'see history',
+      'previous query',
+      'that query',
+      'same query',
+      'last query',
+      'earlier query',
+      'same but',
+      'modify',
+      'change',
+      'update it',
+      'and also',
+      'plus ',
+      'with ',
+    ];
+
+    return followUpPhrases.some(phrase => lowerQuestion.includes(phrase));
   }
 
   private async callApi(messages: ChatMessage[]): Promise<string> {
