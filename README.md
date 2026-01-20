@@ -11,7 +11,7 @@
 
 Ask questions in plain English and get results directly in VS Code.
 
-[Getting Started](#-getting-started) · [Features](#-features) · [Usage](#-usage) · [Troubleshooting](#-troubleshooting)
+[Getting Started](#-getting-started) · [Features](#-features) · [Configuration](#️-configuration) · [Usage](#-usage) · [Troubleshooting](#-troubleshooting)
 
 </div>
 
@@ -109,33 +109,55 @@ cursor --install-extension vscode-postgres-agent-1.0.0.vsix
 
 ---
 
-## 📖 Usage
+## ⚙️ Configuration
 
-### 1. Configure Your LLM
+### Step 1: Configure Your LLM
 
 Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) → **Postgres Agent: Configure LLM**
 
-| Provider | Base URL | Notes |
-|----------|----------|-------|
-| [OpenAI](https://openai.com/) | `https://api.openai.com` | Requires API key |
-| [OpenRouter](https://openrouter.ai/) | `https://openrouter.ai/api` | Multi-model access |
-| [Ollama](https://ollama.ai/) | `http://localhost:11434` | Local models, no key needed |
-| [LiteLLM](https://litellm.ai/) | `http://localhost:4000` | Proxy for multiple providers |
+You'll be prompted to enter:
+- **Base URL** — Your LLM provider's API endpoint
+- **API Key** — Authentication key (if required)
+- **Model Name** — The specific model to use
 
-### 2. Connect to Database
+| Provider | Base URL | Model Name | Notes |
+|----------|----------|------------|-------|
+| [Anthropic](https://anthropic.com/) | `https://api.anthropic.com` | `claude-opus-4-5` | **Recommended** — Best performance for complex queries |
+| [OpenAI](https://openai.com/) | `https://api.openai.com` | `gpt-4` | Requires API key |
+| [OpenRouter](https://openrouter.ai/) | `https://openrouter.ai/api` | `anthropic/claude-opus-4-5` | Multi-model access |
+| [Ollama](https://ollama.ai/) | `http://localhost:11434` | `llama2` | Local models, no key needed |
+| [LiteLLM](https://litellm.ai/) | `http://localhost:4000` | Various | Proxy for multiple providers |
+
+> **💡 Tip:** This extension works best with **Claude Opus 4.5** (`claude-opus-4-5`), which provides superior understanding of complex database schemas and natural language queries.
+
+### Step 2: Connect to Your Database
 
 Open Command Palette → **Postgres Agent: Connect to Database**
 
-Enter your connection details:
-- **Host** — default: `localhost`
-- **Port** — default: `5432`
-- **Username** / **Password**
-- **Database name**
-- **SSL** — Yes/No
+You'll be prompted to enter your PostgreSQL connection details:
 
-The extension automatically introspects your schema upon connection.
+| Field | Description | Default |
+|-------|-------------|---------|
+| **Host** | Database server address | `localhost` |
+| **Port** | PostgreSQL port | `5432` |
+| **Database** | Name of your database | — |
+| **Username** | Database user | — |
+| **Password** | Database password | — |
+| **SSL** | Use SSL connection | `No` |
 
-### 3. Query with Natural Language
+**Example Configuration:**
+```
+Host: localhost
+Port: 5432
+Database: myapp_production
+Username: postgres
+Password: ********
+SSL: Yes
+```
+
+Once connected, the extension automatically introspects your database schema (tables, columns, data types) to provide context for query generation.
+
+### Step 3: Query with Natural Language
 
 Open Command Palette → **Postgres Agent: Open Query Panel**
 
@@ -149,18 +171,34 @@ The extension generates SQL, executes it safely, and displays results in an inte
 
 ---
 
+## 📖 Usage
+
+Once configured, simply open the query panel and start asking questions in plain English. The AI will generate and execute SQL queries based on your database schema.
+
+---
+
 ## 🎯 Example Queries
 
-```sql
--- These are example natural language prompts, not SQL!
+Here are some example prompts that work well with the Postgres Agent:
 
-"Show me all users who registered this month"
+<div align="center">
+  <img src="demo.png" alt="Postgres Agent Demo" width="100%">
+  <p><em>Example natural language queries and their results</em></p>
+</div>
+
+**Sample Prompts:**
+
+```
+"Show me all the tables in schema public and how many records are in each"
+"Show me the average sentiment of each category"
+"Show me all the reviews where the review text contains the word 'battery'"
 "What are the top 10 products by total sales?"
 "List all orders with their items and customer emails"
-"Count how many records are in each table"
 "Find all users whose email contains 'gmail'"
 "Show me the average order value by month"
 ```
+
+The more specific your question, the better the results. Include table names, column names, or conditions when you know them.
 
 ---
 
